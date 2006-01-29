@@ -1,0 +1,18 @@
+The following functionality will be added soon:
+
+Code cleanup
+    The code needs to be cleaned up and made more efficient.
+
+killperprocessname directive
+    Will accept a boolean value. If true, only 1 process per process scope will ever be
+    killed, instead of all process IDs matching kill rules.  This should be used in conjunc-
+    tion with the new killcmd directive. For example, you may define that a database daemon
+    may never take up more than 90% CPU time, and it runs many children processes. If it
+    exceeds 90% CPU time, you want to issue ONE restart command in order to stop and then
+    start all the database processes in one go.
+
+time period limited rules
+    Functionality to limit validity of process scopes to only be checked between defined time
+    periods. For example, only check that httpd is running between the hours of 8am and 5pm on
+    Mondays and Tuesdays.
+

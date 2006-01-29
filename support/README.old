@@ -1,0 +1,140 @@
+   [ Overview | Platforms | Downloads | Requirements | Documentation | Other
+   ]
+
+                       PSMON - Process Monitoring Daemon
+
+   psmon is a Perl script which can be run as a stand alone program or a
+   fully functional background daemon, capable of logging to syslog with
+   customisable email notification facilities.
+
+   The user defines a set of rules in an Apache-style plain text
+   configuration file. These rules describe what processes should always be
+   running on the system, and any limitations on concurrent instances, TTL
+   and maximum CPU/memory usage of processes. psmon scans the UNIX process
+   table and, using the set of rules defined in the configuration file, will
+   respawn any dead processes, and/or slay or "deal with" any aggressive or
+   illegal processes.
+
+   Originally written and designed for use by a UK ISP, it is designed to be
+   as flexible as posible, for use on a per-user, or system-wide server
+   basis.
+
+   For further detailed information on what psmon can do for you, how
+   flexible it is and a list of all its features, please read the
+   documentation. Please feel free to email me at nicolaworthington@msn.com
+   with any questions, suggestions or bug reports you may have.
+
+Platforms
+
+   psmon is known to work fine on the following Linux distributions:
+
+     * Red Hat Linux 6.0, 6.1, 6.2, 7.0, 7.1, 7.2, 7.3, 8.0, 9.0
+     * Mandrake Linux 8.1, 9.0, 9.1 beta
+     * Debian Woody, Potato, Sid
+     * SuSE Linux 7.2, 7.3
+     * Caldera OpenLinux 2.4
+
+   Please let me know if you have tested it on any other platforms. Since it
+   is written in Perl, using commonly available CPAN modules, it should be
+   portable to most *NIX platforms without modification. Unfortunately I have
+   not had the oppertunity to put this to the test, (yet).
+
+Downloads
+
+   2003/Mar/26
+           Work is beginning on allowing regex style process scopes to match
+           against cmndline information. Development versions are available
+           from CVS. Not for use in live production environments.
+
+   2003/Mar/25
+           There is a typo in the main loop of release 1.0.3, of $O{pidfile}
+           being referenced instead of $pidfile. This causes the --daemon
+           functionality to fail. It snuk in when the pidfile variable was
+           moved out of the globals in to a lexically scoped variable. It is
+           fixed in the current devleopment CVS revision and will be fixed in
+           the next tagged release.
+
+   2003/Mar/19
+           If you use the --user function of psmon, you must upgrade to
+           version 1.0.2 or better. Earlier versions have a gaping bug
+           whereby the either all or no processes in the process table are
+           identified as being owned by the specified user.
+
+   Recent stable releases:
+
+     * Current stable release
+       (http://www.nicolaworthington.com/software/psmon/cvs/psmon.tgz)
+     * psmon 1.0.5 released 2004/Jul/29
+       (http://www.nicolaworthington.com/software/psmon/cvs/psmon-1.0.5.tgz
+       233k)
+     * psmon 1.0.4 released 2003/Mar/25
+       (http://www.nicolaworthington.com/software/psmon/cvs/psmon-1.0.4.tgz
+       229k)
+     * psmon 1.0.3 released 2003/Mar/20
+       (http://www.nicolaworthington.com/software/psmon/cvs/psmon-1.0.3.tgz
+       226k)
+     * psmon 1.0.2 released 2003/Mar/19
+       (http://www.nicolaworthington.com/software/psmon/cvs/psmon-1.0.2.tgz
+       223k)
+     * psmon 1.0.1 released 2003/Mar/17
+       (http://www.nicolaworthington.com/software/psmon/cvs/psmon-1.0.1.tgz
+       221k)
+     * psmon 1.0.0 released 2003/Mar/12
+       (http://www.nicolaworthington.com/software/psmon/cvs/psmon-1.0.0.tgz
+       212k)
+
+   Development CVS revisions:
+
+     * View the development CVS repository at
+       http://www.nicolaworthington.com/cvs/psmon/.
+     * Download latest CVS revision in .tgz format from
+       http://www.nicolaworthington.com/software/psmon/cvs/psmon-cvs.tgz.
+     * Download latest CVS revision in .tar.bz2 format from
+       http://www.nicolaworthington.com/software/psmon/cvs/psmon-cvs.tar.bz2.
+     * Download latest CVS revision in .zip format from
+       http://www.nicolaworthington.com/software/psmon/cvs/psmon-cvs.zip.
+
+Requirements
+
+   psmon is written in Perl, and has been confirmed to work with Perl
+   versions 5.005_03, 5.60, 5.61 and 5.80. The following CPAN modules are
+   also required:
+
+     * POSIX (part of the standard Perl distribution)
+     * Getopt::Long (part of the standard Perl distribution)
+     * Net::SMTP (download)
+     * Proc::ProcessTable (download)
+     * Config::General (download)
+     * Unix::Syslog (download)
+
+   These Perl modules are included in the psmon tarball. The install.sh
+   installation script will attempt to install any of these modules if are
+   not already installed, with the exception of POSIX, Getopt::Long, and
+   Net::SMTP. (The first two will always be present, and the latter can be
+   installed manually from the libnet tar.gz file provided). See the CPAN FAQ
+   at http://www.cpan.org/misc/cpan-faq.html and psmon documentation for
+   further information.
+
+Documentation
+
+     o View the current HTML documentation at
+       http://www.nicolaworthington.com/software/psmon/psmon.html.
+     o Download the current man page documentation from
+       http://www.nicolaworthington.com/software/psmon/psmon.1.
+     o View the ChangeLog at
+       http://www.nicolaworthington.com/software/psmon/ChangeLog.
+     o View the old ChangeLog at
+       http://www.nicolaworthington.com/software/psmon/ChangeLog.old.
+     o View the default distribution configuration file at
+       http://www.nicolaworthington.com/software/psmon/psmon.conf.
+
+Other
+
+     o View the TODO list at
+       http://www.nicolaworthington.com/software/psmon/psmon.html#todo.
+     o This project is licensed under the terms of the GNU General Public
+       License.
+     o Visit the psmon Freshmeat project page at
+       http://freshmeat.net/projects/psmon/.
+     o Please email the author Nicola Worthington at
+       nicolaworthington@msn.com for help, suggestions, bug reports etc.

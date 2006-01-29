@@ -1,0 +1,786 @@
+#!/usr/bin/perl -w
+###############################################################################
+# $Id: psmon,v 1.2 2005/05/29 10:19:10 nicolaw Exp $
+# psmon - Process Table Monitor Script
+# Copyright: (c)2002,2003,2004,2005 Nicola Worthington. All rights reserved.
+###############################################################################
+# This file is part of psmon.
+#
+# psmon is free software; you can redistribute it and/or modify it under the 
+# terms of the GNU General Public License as published by the Free Software 
+# Foundation; either version 2 of the License, or (at your option) any later 
+# version.
+#
+# psmon is distributed in the hope that it will be useful, but WITHOUT ANY 
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+# A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with 
+# psmon; if not, write to the Free Software Foundation, Inc., 59 Temple Place, 
+# Suite 330, Boston, MA  02110-1301  USA
+###############################################################################
+
+use strict;
+use warnings;
+use English;
+
+use POSIX ();
+use Unix::Syslog qw(:macros);
+use File::Basename ();
+use	Util::PSMon ();
+use	Util::PSMon::Util ();
+
+use vars qw($VERSION $SELF $conf);
+
+$OUTPUT_AUTOFLUSH = 1;
+($SELF = $PROGRAM_NAME)	=~ s|^.*/||;
+$VERSION = sprintf('%d.%02d', q$Revision: 1.2 $ =~ /(\d+)/g);
+
+
+
+# Parse command line
+my $opt = Util::PSMon::Util::get_command_line_options();
+$opt->{default_conf} = '/etc/psmon.conf' };
+
+# Print help information
+if ($opt->{help}) {
+	require Pod::Usage;
+	Pod::Usage::pod2usage(-verbose => 2);
+	exit(0);
+}
+
+# Print version information
+if ($opt->{version}) {
+	print "$SELF $VERSION\n";
+	print "Written by Nicola Worthington, <nicolaworthington\@msn.com>.\n";
+	print "Copyright (C) 2002,2003,2004,2005 Nicola Worthington.\n";
+	exit(0);
+}
+
+# Open syslog
+print "Opening default syslog facility\n" if $opt->{verbose};
+Unix::Syslog::openlog $SELF, LOG_PID | LOG_PERROR, logfacility;
+
+# Check the user we should be running as
+$opt->{uid} = parse_user_to_run_as($opt);
+$opt->{conf} = get_config_to_read_from($opt->{conf});
+
+# Read the config file and setup signal handlers
+$conf = read_config($opt->{conf});
+$opt->{dryrun} = 1 if $conf->{dryrun};
+if ($conf->{disabled}) {
+	log LOG_CRIT, "Your configuration file '$opt->{conf}' is disabled. '.
+					'Remove the 'Disabled True' directive from the file.";
+	exit 3;
+}
+
+# Reopen syslog without PERROR (no output to terminal)
+print "Reopening syslog facility\n" if $opt->{verbose};
+Unix::Syslog::closelog;
+Unix::Syslog::openlog $SELF, LOG_PID, logfacility $conf->{facility};
+
+# Run a single check
+unless (exists $opt->{daemon}) {
+	check_processtable(exists $opt->{uid} ? $opt->{uid} : '');
+
+# Run as a daemon
+} else {
+	# Read the config file and setup signal handlers
+	$SIG{'HUP'} = sub {
+		log LOG_NOTICE, 'Recieved SIGHUP; reloading configuration';
+		$conf = read_config($opt->{conf}); };
+
+	$SIG{'USR1'} = sub {
+		log LOG_NOTICE, 'Recieved SIGUSR1; checking process table immediately';
+		check_processtable(exists $opt->{uid} ? $opt->{uid} : ''); };
+
+	# Figure out the PID file name
+	my ($x,$y) = (POSIX::getcwd.$opt->{conf},0);
+	for (0..length($x)-1) { $y += ord substr($x,$_,1); }
+	my @piddirs = qw(/var/run /tmp .);
+	my $pidfile = '/var/run/psmon.pid';
+	for my $piddir (@piddirs) {
+		my $pidfile2 = sprintf("%s%s/%s-%s-%s.pid",
+					$piddir,
+					$SELF,
+					($opt->{uid} ? $opt->{uid} : $EFFECTIVE_USER_ID),
+					$y
+				);
+		if (-d File::Basename::dirname($pidfile2) &&
+			-w File::Basename::dirname($pidfile2)) {
+			$pidfile = $pidfile2;
+			last;
+		}
+	}
+
+	print "Using PID file $pidfile\n" if $opt->{verbose};
+
+	# Launch in to the background
+	Util::PSMon::Util::daemonize($pidfile);
+
+	# Die if you remove the runtime PID file 
+	while (-f $pidfile) {
+		check_processtable(exists $opt->{uid} ? $opt->{uid} : '');
+		sleep $conf->{frequency};
+	}
+}
+
+# Finish
+log LOG_NOTICE, "Terminating.\n";
+Unix::Syslog::closelog;
+exit;
+
+
+
+
+
+
+
+
+
+
+
+my $cref_loglevel = \sub loglevel {
+	local $_ = shift || '';
+	return $_ if /^\d+$/;
+	return LOG_EMERG	if /^\s*([a-z]+_)?EMERG((A|E)NCY)?\s*$/i;
+	return LOG_ALERT	if /^\s*([a-z]+_)?ALERT\s*$/i;
+	return LOG_CRIT		if /^\s*([a-z]+_)?CRIT(ICAL)?\s*$/i;
+	return LOG_ERR		if /^\s*([a-z]+_)?ERR(OR)?\s*$/i;
+	return LOG_WARNING	if /^\s*([a-z]+_)?WARN(ING)?\s*$/i;
+	#return LOG_NOTICE	if /^\s*([a-z]+_)?NOTICE\s*$/i;
+	return LOG_INFO		if /^\s*([a-z]+_)?INFO(MATION(AL)?)?\s*$/i;
+	return LOG_DEBUG	if /^\s*([a-z]+_)?DEBUG\s*$/i;
+	return LOG_NOTICE;
+}
+
+my $cref_logfacility = \sub logfacility {
+	local $_ = shift || '';
+	return $_ if /^\d+$/;
+	return LOG_KERN		if /^\s*([a-z]+_)?KERN((A|E)L)?\s*$/i;
+	return LOG_USER		if /^\s*([a-z]+_)?USER\s*$/i;
+	return LOG_MAIL		if /^\s*([a-z]+_)?MAIL\s*$/i;
+	#return LOG_DAEMON	if /^\s*([a-z]+_)?DAEMON\s*$/i;
+	return LOG_AUTH		if /^\s*([a-z]+_)?AUTH\s*$/i;
+	return LOG_SYSLOG	if /^\s*([a-z]+_)?SYSLOGD?\s*$/i;
+	return LOG_LPR		if /^\s*([a-z]+_)?LPR\s*$/i;
+	return LOG_NEWS		if /^\s*([a-z]+_)?NEWS\s*$/i;
+	return LOG_UUCP		if /^\s*([a-z]+_)?UUCP\s*$/i;
+	return LOG_CRON		if /^\s*([a-z]+_)?CRON\s*$/i;
+	return LOG_AUTHPRIV	if /^\s*([a-z]+_)?AUTHPRIV\s*$/i;
+	return LOG_FTP		if /^\s*([a-z]+_)?FTPD?\s*$/i;
+	return LOG_LOCAL0	if /^\s*([a-z]+_)?LOCAL0\s*$/i;
+	return LOG_LOCAL1	if /^\s*([a-z]+_)?LOCAL1\s*$/i;
+	return LOG_LOCAL2	if /^\s*([a-z]+_)?LOCAL2\s*$/i;
+	return LOG_LOCAL3	if /^\s*([a-z]+_)?LOCAL3\s*$/i;
+	return LOG_LOCAL4	if /^\s*([a-z]+_)?LOCAL4\s*$/i;
+	return LOG_LOCAL5	if /^\s*([a-z]+_)?LOCAL5\s*$/i;
+	return LOG_LOCAL6	if /^\s*([a-z]+_)?LOCAL6\s*$/i;
+	return LOG_LOCAL7	if /^\s*([a-z]+_)?LOCAL7\s*$/i;
+	return LOG_DAEMON;
+}
+
+my $cref_alert = \sub alert {
+	my ($LOG_TYPE,$mailto,$subject,@ary) = @_;
+	$subject ||= 'undef alert message';
+	$subject .= ' [DRYRUN]' if exists $opt->{dryrun};
+	log $LOG_TYPE, $subject;
+	sendmail($conf->{notifyemailfrom},$mailto,$subject,@ary) if $mailto;
+}
+
+my $cref_log = \sub log {
+	my ($loglevel,@msg) = @_;
+	$loglevel = LOG_INFO if !defined $loglevel || $loglevel !~ /^[0-7]$/;
+	@msg = '' unless @msg;
+	unshift @msg,'Process exiting!' if $loglevel <= 2;
+	{ # Unix::Syslog gets unhappy for it's sprintf stuff otherwise :)
+		(my $syslogmsg = "@msg") =~ s/%/%%/g;
+		Unix::Syslog::syslog $loglevel, $syslogmsg;
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Declare global package variables
+package Util::PSMon;
+use Proc::ProcessTable ();
+use Util::PSMon::Util;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+########################################
+# User subroutines
+
+sub check_processtable {
+	my $uid = shift;
+
+	# Slurp in the process table
+	my %proc;
+	print "Scanning process table\n" if $opt->{verbose};
+	my $t = new Proc::ProcessTable;
+	foreach my $p (@{$t->table}) {
+		# Only grab information on processes we have rules for
+		next unless $conf->{process}->{'*'} || $conf->{process}->{$p->{fname}};
+
+		# Skip processes that don't belong to the specified UID if applicable
+		next if $uid && $p->{uid} != $uid;
+
+		my $i = !exists $proc{$p->{fname}} ? 0 : @{$proc{$p->{fname}}};
+		$proc{$p->{fname}}->[$i] = {
+				pid	=> $p->{pid},
+				ppid	=> $p->{ppid},
+				fname	=> $p->{fname},
+				tty	=> $p->{ttynum},
+				start	=> $p->{start},	
+				pctcpu	=> _isnumeric($p->{pctcpu}) || 0,
+				pctmem	=> _isnumeric($p->{pctmem}) || 0,
+			};
+	}
+	undef $t;
+
+	print "Calculating action to take\n" if $opt->{verbose};
+
+	# Build a list of bad naughty processes
+	my %slay;
+	foreach my $process (keys %{$conf->{process}}) {
+		next unless exists $proc{$process} || $process eq '*';
+
+		foreach my $p (@{$proc{$process}}) {
+			# Too many instances running
+			if ($conf->{process}->{$process}->{instances} &&
+					@{$proc{$process}} >
+					$conf->{process}->{$process}->{instances}) {
+				push @{$slay{$process}}, {
+						pid	=> $p->{pid},
+						cause	=> 'instances',
+						reason	=> sprintf("%d instances exceeds limit of %d",
+								scalar @{$proc{$process}},
+								$conf->{process}->{$process}->{instances})
+					}
+			}
+
+			# Exceeded TTL
+			if ($conf->{process}->{$process}->{ttl} &&
+				time() - $p->{start} > $conf->{process}->{$process}->{ttl}) {
+				push @{$slay{$process}}, {
+						pid	=> $p->{pid},
+						cause	=> 'ttl',
+						reason	=> sprintf("%d exceeds TTL of %d",
+								time() - $p->{start},
+								$conf->{process}->{$process}->{ttl})
+					}
+			} 
+
+			# Check CPU and Memory usage
+			pctcheck($process,$p,\%slay);
+		}
+	}
+
+	# Check CPU and Memory usage for *ALL* processes
+	if ($conf->{process}->{'*'}) {
+		while (my ($process,$proclist) = each %proc) {
+			for my $p (@{$proclist}) {
+				pctcheck($process,$p,\%slay,'*');
+			}
+		}
+	}
+
+	# Check CPU and Memory usage
+	sub pctcheck {
+		my ($process,$p,$slayref,$scope) = @_;
+		$scope ||= $process;
+
+		# Exceeded CPU Percent
+		$conf->{process}->{$scope}->{pctcpu} =
+			_isnumeric($conf->{process}->{$scope}->{pctcpu});
+		if ($conf->{process}->{$scope}->{pctcpu} &&
+			$p->{pctcpu} > $conf->{process}->{$scope}->{pctcpu}) {
+			push @{$slayref->{$process}}, {
+					pid	=> $p->{pid},
+					cause	=> 'pctcpu',
+					reason	=> sprintf(
+							"%.2f%% CPU usage exceeds limit of %.2f%%",
+							$p->{pctcpu},
+							$conf->{process}->{$scope}->{pctcpu}
+						)
+				}
+		}
+
+		# Exceeded Memory Percent
+		$conf->{process}->{$scope}->{pctmem} =
+			_isnumeric($conf->{process}->{$scope}->{pctmem});
+		if ($conf->{process}->{$scope}->{pctmem} &&
+			$p->{pctmem} > $conf->{process}->{$scope}->{pctmem}) {
+			push @{$slayref->{$process}}, {
+					pid	=> $p->{pid},
+					cause	=> 'pctmem',
+					reason	=> sprintf(
+							"%.2f%% memory usage exceeds limit of %.2f%%",
+							$p->{pctmem},
+							$conf->{process}->{$scope}->{pctmem}
+						)
+				}
+		}
+	}
+
+	print "Killing bad processes\n" if keys %slay && $opt->{verbose};
+	# Kill naughty processes
+	while (my ($process,$aryref) = each %slay) {
+		# Decide what loglevel we should report the action as
+		my $loglevel = loglevel($conf->{process}->{$process}->{killloglevel} ||
+					$conf->{process}->{$process}->{loglevel} ||
+					$conf->{killloglevel} || $conf->{loglevel} || LOG_NOTICE);
+
+		# Protect safe process IDs
+		if ($conf->{process}->{$process}->{pidfile} &&
+			!$conf->{process}->{$process}->{ppid}) {
+			if (-e $conf->{process}->{$process}->{pidfile} &&
+				open(FH,$conf->{process}->{$process}->{pidfile})) {
+				$conf->{process}->{$process}->{ppid} = <FH>;
+				chomp $conf->{process}->{$process}->{ppid};
+				close(FH);
+			}
+		}
+		my $ppid = $conf->{process}->{$process}->{ppid} || 0;
+
+		# See about slaying each of these process instances
+		foreach my $slayref (@{$aryref}) {
+			next if $slayref->{pid} == $ppid
+				|| $slayref->{pid} == $$
+				|| $slayref->{pid} <= 1
+				|| $conf->{neverkillpid} =~ /\b$slayref->{pid}\b/
+				|| $conf->{neverkillprocessname} =~ /(^|\s+)$process(\s+|$)/;
+
+			# Define who to mail alerts to
+			my $mailto = ($conf->{process}->{$process}->{noemailonkill} ||
+					$conf->{process}->{$process}->{noemail}) ? '' : 
+					$conf->{process}->{$process}->{adminemail} ||
+					$conf->{notifyemail};
+
+			# Try to slay the process
+			slay_process($process, $loglevel, $mailto, $slayref,
+				exists $conf->{process}->{$process}->{killcmd} ?
+				$conf->{process}->{$process}->{killcmd} : '');
+		}
+	}
+
+	# Spawn any dead processes
+	foreach my $process (keys %{$conf->{process}}) {
+		# Only attempt to spawn a process if there are no current instances,
+		# and there is a spawncmd directive defined
+		if (!exists $proc{$process} &&
+			exists $conf->{process}->{$process}->{spawncmd}) {
+
+			# Decide what loglevel we should report the action as
+			my $loglevel =
+					loglevel($conf->{process}->{$process}->{spawnloglevel} ||
+					$conf->{process}->{$process}->{loglevel} ||
+					$conf->{spawnloglevel} || $conf->{loglevel} || LOG_NOTICE);
+
+			# Define who to mail alerts to
+			my $mailto = ($conf->{process}->{$process}->{noemailonspawn} ||
+					$conf->{process}->{$process}->{noemail}) ? '' : 
+					$conf->{process}->{$process}->{adminemail} ||
+					$conf->{notifyemail};
+
+			# Try to spawn the process
+			spawn_process($process, $loglevel, $mailto,
+						$conf->{process}->{$process}->{spawncmd});
+		}
+	}
+}
+
+# Type to slay a process
+sub slay_process {
+	my ($process, $loglevel, $mailto, $slayref, $cmd) = @_;
+
+	# Protect safe processes
+	if ($slayref->{pid} <= $conf->{lastsafepid} &&
+		!$conf->{protectsafepidsquietly}) {
+		print_init_style("Saving PID $slayref->{pid} ".
+						"($process) from death",'OK');
+		alert $loglevel, $mailto,
+			"Saved safe PID $slayref->{pid} ($process) from death";
+
+	# This process is not protected
+	} else { 
+		print_init_style("Killing PID $slayref->{pid} ($process)");
+
+		my $cmdrtn = $cmd && !exists $opt->{dryrun} ?
+						system("$cmd > /dev/null 2>&1") : 0;
+		if ($cmd) { # Tried to stop with the killcmd directive 
+ 			if ($cmdrtn) {
+				print_init_style('FAILED');
+				alert $loglevel-1, $mailto, "Failed to execute '$cmd' to ".
+										"kill PID $slayref->{pid} ($process)";
+			} else {
+				print_init_style('OK');
+				alert $loglevel, $mailto, "Executed '$cmd' to kill PID ".
+											"$slayref->{pid} ($process)";
+			}
+		}
+
+		# Don't try if killcmd was tried and succeded
+		unless ($cmd && !$cmdrtn) { 
+			my $killrtn = !exists $opt->{dryrun} ? kill(9,$slayref->{pid}) : 1;
+			if ($killrtn) {
+				print_init_style('KILLED');
+				alert $loglevel, $mailto, "Killed PID $slayref->{pid} ".
+									"($process) because $slayref->{reason}";
+			} else {
+				print_init_style('FAILED');
+				alert $loglevel-1, $mailto, "Failed to kill PID ".
+										"$slayref->{pid} ($process)";
+			}
+		}
+	}
+}
+
+# Print a Red Hat sysinitv style status message
+sub print_init_style {
+	return if $opt->{daemon};
+	foreach my $message (@_) {
+		if (length($message) <= 6) {
+			print "\033[60G\[";
+			if    (exists $opt->{dryrun})    { print "\033[1;33mDRYRUN";  }
+			elsif ($message eq 'OK')     { print "\033[1;32m  OK  ";  }
+			elsif ($message eq 'FAILED') { print "\033[1;31m$message"; }
+			elsif ($message eq 'KILLED' || $message eq 'DRYRUN')
+											{ print "\033[1;33m$message"; }
+			print "\033[0;39m\]\n";
+		} else {
+			print $message;
+		}
+	}
+}
+
+# Spawn a process
+sub spawn_process {
+	my ($process, $loglevel, $mailto, $cmd) = @_;
+
+	print_init_style("Starting $process");
+	my $rtn = !exists $opt->{dryrun} ? system("$cmd > /dev/null 2>&1") : 0;
+	if ($rtn) {
+		print_init_style('FAILED');
+		alert $loglevel-1, $mailto, "Failed to spawn '$process' with '$cmd'";
+	} else {
+		print_init_style('OK');
+		alert $loglevel, $mailto, "Spawned '$process' with '$cmd'";
+	}
+}
+
+sub is_superuser {
+	my $uid = shift;
+	return 1 if $uid == 0;
+}
+
+sub get_config_to_read_from {
+	my $filename = shift || '';
+
+	my $retval = sprintf('%s/etc/psmon.conf',$ENV{HOME});
+	if (-f $filename && -r $filename) {
+		$retval = $filename;
+	} elsif (is_superuser($EFFECTIVE_USER_ID)) {
+		$retval = $opt->{default_conf};
+	}
+
+	print "Using $retval configuration file\n" if $opt->{verbose};
+	return $retval;
+}
+
+sub parse_user_to_run_as {
+	my $opt = shift;
+	my $uid = undef;
+
+	if (exists $opt->{user}) {
+		$uid = scalar getpwnam($opt->{user}) || '';
+		unless ($uid) {
+			log LOG_CRIT, "Invalid user specified: '$opt->{user}'";
+			exit 2;
+		}
+	} elsif (!is_superuser($EFFECTIVE_USER_ID) && !exists $opt->{nouser}) {
+		$uid = $EFFECTIVE_USER_ID;
+	}
+
+	if ($opt->{verbose} && exists $uid && length($uid >= 1)) {
+		my $name = scalar getpwuid($opt->{user});
+		print "Scanning for processes owned by UID $uid ($name)\n";
+	}
+
+	return $uid;
+}
+
+sub _isnumeric {
+	local $_ = shift || '';
+	if (/^\s*(\-?[\d\.]+)\s*/) { return $1; }
+	return undef;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+package Util::PSMon::Util;
+
+use Getopt::Long ();
+use Net::SMTP ();
+use POSIX ();
+use Config::General ();
+
+use constant HOSTNAME => (POSIX::uname())[1];
+
+# Daemonize self
+sub daemonize {
+	my $pidfile = shift;
+	# Check that we're not already running, and quit if we are
+	if (-f $pidfile) {
+		unless (open(PID,$pidfile)) {
+			log LOG_CRIT,
+				"Unable to open file handle PID for file '$pidfile': $!\n";
+			exit 5;
+		}
+		my $pid = <PID>;
+		close(PID) || log LOG_WARNING,
+				"Unable to close file handle PID for file '$pidfile': $!\n";
+		if (-f "/proc/$pid/stat") {
+			open(FH,"/proc/$pid/stat") || log LOG_WARNING, "Unable to open file handle FH for file '/proc/$pid/stat': $!\n";
+			my $line = <FH>;
+			close(FH) || log LOG_WARNING, "Unable to close file handle FH for file '/proc/$pid/stat': $!\n";
+			if ($line =~ /\d+[^(]*\((.*)\)\s*/) {
+				my $process = $1;
+				if ($process =~ /^$SELF$/) {
+					log LOG_NOTICE,
+						"$SELF already running at PID $pid; exiting.\n"
+							unless exists $opt->{cron};
+					Unix::Syslog::closelog;
+					exit 0;
+				}
+			}
+		} else {
+			log LOG_NOTICE, "Removing stale PID file.\n";
+			unlink($pidfile);
+		}
+	}
+
+	# Daemon parent about to spawn
+	if (my $pid = fork) {
+		log LOG_NOTICE, "Forking background daemon, process $pid.\n";
+		Unix::Syslog::closelog;
+		exit 0;
+
+	# Child daemon process that was spawned
+	} else {
+		# Fork a second time to get rid of any attached terminals
+		if (my $pid = fork) {
+			log LOG_NOTICE,
+				"Forking second background daemon, process $pid.\n";
+			Unix::Syslog::closelog;
+			exit 0;
+		} else {
+			unless (defined $pid) {
+				log LOG_CRIT, "Cannot fork: $!\n";
+				exit 6;
+			}
+			close(STDOUT); close(STDERR); chdir '/';
+			unless (open(FH,">$pidfile")) {
+				log LOG_CRIT,
+					"Unable to open file handle FH for file '$pidfile': $!\n";
+				exit 7;
+			}
+			print FH $$;
+			close(FH) || log LOG_WARNING,
+				"Unable to close file handle FH for file '$pidfile': $!\n";
+		}
+	}
+}
+
+sub get_command_line_options {
+	my $opt = {};
+	Getopt::Long::GetOptions($opt,
+			'help',
+			'version',
+			'verbose',
+			'daemon',
+			'cron',
+			'dryrun',
+			'conf=s',
+			'user=s',
+			'nouser',
+			'adminemail=s'
+		);
+	return $opt;
+}
+
+# Send an email
+sub sendmail {
+	my ($mail,$to,$subject,@ary) = @_;
+
+	$to = $opt->{adminemail} if exists $opt->{adminemail};
+			@ary = $subject unless @ary;
+			$subject = sprintf("[%s/%s] %s",$SELF,HOSTNAME,$subject);
+			unshift @ary,"Subject: $subject\n";
+			unshift @ary,"To: \"$to\" <$to>";
+			unshift @ary,"From: \"$mail\" <$mail>";
+
+	# Open the SMTP connection
+	my $smtp = Net::SMTP->new(
+						$conf->{smtphost},
+						Timeout	=> $conf->{smtptimeout},
+						Hello	=> HOSTNAME,
+					);
+
+	#  If the SMTP connection was established then send the email
+	if ($smtp) { 
+		$smtp->mail($mail);
+		$smtp->to($to);
+		$smtp->data(join("\n",@ary));
+		$smtp->dataend();
+
+	# Otherwise try using the local sendmail binary
+	} else { 
+		log LOG_WARNING, "Unable to establish SMTP connection with ".
+					"$conf->{smtphost}; attempting sendmail pipe instead";
+		if (open(PH,"|$conf->{sendmailcmd}")) {
+			print PH $_ for @ary;
+			close(PH) || log LOG_WARNING, "Unable to close pipe handle PH ".
+									"for command '|$conf->{sendmailcmd}': $!";
+		} else {
+			log LOG_WARNING, "Unable to open pipe handle PH for command ".
+								"'|$conf->{sendmailcmd}': $!";
+		}
+	}
+}
+
+# Read in the config
+sub read_config {
+	my $config_file = shift;
+
+	# Barf and die if there's no configuration file!
+	unless (-e $config_file) {
+		log LOG_CRIT, "Configuration file $config_file does not exist\n";
+		exit 4;
+	}
+
+	# Define default configuration values
+	my %default = (
+			facility		=> 'LOG_DAEMON',
+			loglevel		=> 'LOG_NOTICE',
+			notifyemail		=> 'root@localhost',
+			notifyemailfrom	=> sprintf('%s@%s',
+								(getpwuid($EFFECTIVE_USER_ID))[0],HOSTNAME),
+			smtphost		=> 'localhost',
+			smtptimeout		=> 20,
+			sendmailcmd		=> '/usr/sbin/sendmail -t',
+			frequency		=> 10,
+			lastsafepid		=> 100,
+			neverkillpid	=> 1,
+			notifydetail	=> 'verbose',
+			protectsafepidsquietly	=> 0,
+			neverkillprocessname	=> 'kswapd kupdated mdrecoveryd',
+		);
+
+	# Read config file
+	my $conf = new Config::General(
+			-ConfigFile				=> $config_file,
+			-LowerCaseNames			=> 1,
+			-UseApacheInclude		=> 1,
+			-IncludeRelative		=> 1,
+			-DefaultConfig			=> \%default,
+			-MergeDuplicateBlocks	=> 1,
+			-AllowMultiOptions		=> 1,
+			-MergeDuplicateOptions	=> 1,
+			-AutoTrue				=> 1,
+		);
+	print "Reading configuration file\n" if $opt->{verbose};
+	my %config = $conf->getall;
+
+	# Force default values for dodgy user configuration options
+	$config{frequency} = $default{frequency} 
+		unless $config{frequency} =~ /^\d+$/;
+
+	$config{lastsafepid} = _isnumeric($config{lastsafepid})
+							|| $default{lastsafepid};
+
+	return \%config;
+}
+

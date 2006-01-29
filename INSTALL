@@ -1,0 +1,18 @@
+$ tar -zxvf psmon-1.nn.tar.gz
+$ cd psmon-1.nn
+$ su
+Password:
+$ support/install.sh
+$ vi /etc/psmon.conf
+
+-or-
+
+$ tar -zxvf psmon-1.nn.tar.gz
+$ cd psmon-1.nn
+$ perl Makefile.PL
+$ make
+$ su
+Password:
+$ make install
+$ vi /etc/psmon.conf
+

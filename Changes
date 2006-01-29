@@ -1,0 +1,378 @@
+2005-12-30 13:26  nicolaw
+
+	* bin/psmon (1.39): Fixed an ununitialised variable at line 1447
+	  and some logic which was falsely adding [DRYRUN] to some subject
+	  lines
+
+2005-12-30 02:06  nicolaw
+
+	* support/: commit.sh (1.9), install.sh (1.11), psmon.html (1.18):
+	  Changed to apache license
+
+2005-12-30 02:06  nicolaw
+
+	* bin/psmon-config (1.7): Removed old GPL license info
+
+2005-12-30 02:01  nicolaw
+
+	* support/perldoc.css (1.8): Removed old GNU GPL license cruft
+
+2005-12-30 01:59  nicolaw
+
+	* bin/psmon (1.38): Fixed some left over GNU GPL license cruft
+
+2005-12-30 01:51  nicolaw
+
+	* bin/psmon (1.37): Removed stray fragment of broken code
+
+2005-12-30 01:37  nicolaw
+
+	* MANIFEST (1.12): Added tests
+
+2005-12-30 01:34  nicolaw
+
+	* bin/psmon (1.36): Changed licnese to Apache 2.0
+
+2005-12-30 00:39  nicolaw
+
+	* COPYING (1.8): Delete
+
+2005-12-30 00:32  nicolaw
+
+	* MANIFEST (1.11): Added LICENSE and NOTICE and removed COPYING
+
+2005-12-30 00:32  nicolaw
+
+	* NOTICE (1.1): Adding
+
+2005-12-30 00:11  nicolaw
+
+	* LICENSE (1.1), doit (1.1): Adding
+
+2005-05-29 11:19  nicolaw
+
+	* COPYING (1.7), META.yml (1.13), Makefile.PL (1.9), bin/psmon
+	  (1.35), bin/psmon-config (1.6), support/commit.sh (1.8),
+	  support/install.sh (1.10), support/perldoc.css (1.7),
+	  support/psmon.html (1.17): Updated FSF Address
+
+2005-05-17 13:34  nicolaw
+
+	* bin/psmon (1.34): POD tweak
+
+2005-05-17 13:31  nicolaw
+
+	* bin/psmon (1.33): Added POD for PSMon::Config
+
+2005-05-17 13:24  nicolaw
+
+	* bin/psmon (1.32): Typo
+
+2005-05-17 13:20  nicolaw
+
+	* support/psmon.html (1.16): Updated from new POD
+
+2005-05-17 13:18  nicolaw
+
+	* bin/psmon (1.31): Removed dependancy on Pod::Usage after putting
+	  it in some time ago.  Added some additional paramater checking to
+	  PSMon::Config and PSMon::Logging to allow for easier and safer
+	  expansion by third parties.
+
+2005-05-11 22:33  nicolaw
+
+	* bin/psmon (1.30): Abstracted out configuration code in to
+	  PSMon::Config object and module
+
+2005-05-06 17:10  nicolaw
+
+	* bin/psmon (1.29): Updated POD some more
+
+2005-05-06 17:00  nicolaw
+
+	* bin/psmon (1.28): Changed order of directives in POD and added
+	  some extra POD
+
+2005-05-06 15:38  nicolaw
+
+	* bin/psmon (1.27): PSMon -> Psmon in pod
+
+2005-05-06 15:36  nicolaw
+
+	* support/psmon.html (1.15): Updated from new Pod
+
+2005-05-06 15:36  nicolaw
+
+	* bin/psmon (1.26): Fixed some more POD
+
+2005-05-06 15:12  nicolaw
+
+	* META.yml (1.11): Comitting
+
+2005-05-06 15:12  nicolaw
+
+	* support/psmon.html (1.14): Updated from new POD
+
+2005-05-06 15:12  nicolaw
+
+	* install.sh (1.8): Deleting
+
+2005-05-06 15:11  nicolaw
+
+	* MANIFEST (1.10): Added support/psmon.html and removed
+	  support/commit.sh
+
+2005-05-06 15:11  nicolaw
+
+	* support/install.sh (1.9): Changed test from commit.sh to
+	  psmon.html since commit.sh isn't going to distributed anymore (it's
+	  pointless!)
+
+2005-05-06 14:46  nicolaw
+
+	* bin/psmon (1.25): More POD
+
+2005-05-06 14:41  nicolaw
+
+	* support/psmon.html (1.13): Updated from new POD
+
+2005-05-06 14:41  nicolaw
+
+	* bin/psmon (1.24): Added missing options from operation section.
+
+2005-05-06 14:31  nicolaw
+
+	* support/psmon.html (1.12): Updated from new POD
+
+2005-05-06 14:31  nicolaw
+
+	* bin/psmon (1.23): POD fix
+
+2005-05-06 14:27  nicolaw
+
+	* support/psmon.html (1.11): Updated form new POD again
+
+2005-05-06 14:26  nicolaw
+
+	* bin/psmon (1.22): Added more POD
+
+2005-05-06 14:11  nicolaw
+
+	* support/psmon.html (1.10): Updated HTML from new POD again
+
+2005-05-06 14:10  nicolaw
+
+	* bin/psmon (1.21): Added some POD re. Net::SMTP and Unix::Syslog
+	  dependancies changing
+
+2005-05-06 13:52  nicolaw
+
+	* support/README.old (1.2): Removed unwanted references
+
+2005-05-06 13:51  nicolaw
+
+	* support/psmon.html (1.9): Updated from current psmon POD
+
+2005-05-06 13:50  nicolaw
+
+	* bin/psmon-config (1.5): Added a new directive and additional
+	  information to write to the config file
+
+2005-05-06 13:49  nicolaw
+
+	* etc/psmon.conf (1.8): Build from psmon-config
+
+2005-05-04 18:53  nicolaw
+
+	* bin/psmon (1.20): Fixed a deliberate typo which was left in by
+	  mistake.  Added real values for loglevels in stub module which are
+	  required for some functions in the logging methods
+
+2005-05-04 18:46  nicolaw
+
+	* bin/psmon (1.19): Removed Unix::Syslog dependancy - will use
+	  stubs in <DATA> handle which will print messages to STDERR if
+	  Unix::Syslog cannot be loaded.  Abstracted the overloading of the
+	  AdminEmail command line option over other AdminEmail values from the
+	  sendmail() method to the calling code.  Fixed some POD errors.
+	  Tidied up the debug output code, which may now be enabled by setting
+	  the PSMon_DEBUG environment variable to a boolean true value.
+
+2005-04-25 19:26  nicolaw
+
+	* INSTALL (1.7): Adding perl Makefile.PL option
+
+2005-04-17 22:22  nicolaw
+
+	* MANIFEST (1.9), author.jpg (1.1): Adding a photo of the author
+
+2005-04-14 16:44  nicolaw
+
+	* Changes (1.8): Commited entried to changelog
+
+2005-04-14 16:43  nicolaw
+
+	* bin/psmon (1.18): Re-ordered some POD
+
+2005-04-14 16:37  nicolaw
+
+	* bin/psmon (1.17): Fixed daemonise() so that it will work on
+	  non-Linux platforms.  Fixed LOG_PERROR being used on platforms which
+	  do not support it.  Fixed use of /usr/sbin/sendmail to check for
+	  existance of /lib/sendmail also.  Added some more recent performance
+	  values in the POD.
+
+2005-04-13 22:57  nicolaw
+
+	* etc/psmon.conf (1.7): Fixed bug with legacy config option
+	  NotifyEmail not getting translated to AdminEmail option, and calling
+	  of alert() method.
+
+2005-04-13 22:57  nicolaw
+
+	* bin/psmon (1.16): Fixed bug with legacy config option NotifyEmail
+	  not getting translated to AdminEmail option, and calling of alert()
+	  method.  Removed depreciated dump of various /proc information in
+	  alert emails in favor of spawn and kill command stdout and stderr
+	  and exit values etc.
+
+2005-04-13 18:32  nicolaw
+
+	* Changes (1.7): Commited new log items from CVS
+
+2005-04-13 18:29  nicolaw
+
+	* bin/psmon (1.15): Abstracted syslog and email logging to a
+	  seperate OO module so that Unix::Syslog and Net::SMTP can be made
+	  optional modules in the next release instead of mandatory. Added the
+	  defaultemailmethod configuration directive.
+
+2005-03-31 15:47  nicolaw
+
+	* META.yml (1.10): Updating
+
+2005-03-02 12:34  nicolaw
+
+	* bin/psmon (1.14): Fixed some typos in the POD
+
+2005-03-02 12:34  nicolaw
+
+	* bin/psmon-config (1.4): Fixed some more defaults
+
+2005-03-02 12:15  nicolaw
+
+	* bin/psmon-config (1.3): Fixed a default value
+
+2005-03-02 12:10  nicolaw
+
+	* bin/psmon-config (1.2): Fixed a directive
+
+2005-03-02 12:08  nicolaw
+
+	* bin/psmon (1.13): Removed some old commented out code, fixed some
+	  space/tabbing and corrected some POD and a directive mismatch/error
+
+2005-03-02 11:48  nicolaw
+
+	* Makefile.PL (1.8): Added psmon-config
+
+2005-03-02 11:48  nicolaw
+
+	* support/commit.sh (1.7): Changed hostname and not to update
+	  readme on the fly
+
+2005-03-02 11:47  nicolaw
+
+	* support/README.old (1.1): Moved from the old ../README
+
+2005-03-02 11:47  nicolaw
+
+	* README (1.7): Shortened
+
+2005-03-02 11:44  nicolaw
+
+	* support/install.sh (1.8): Updated to handle psmon-config
+
+2005-03-02 11:22  nicolaw
+
+	* MANIFEST (1.8): Typo
+
+2005-03-02 11:20  nicolaw
+
+	* MANIFEST (1.7): Added psmon-config
+
+2005-03-02 01:27  nicolaw
+
+	* Makefile.PL (1.7): Added psmon-config
+
+2005-03-02 01:25  nicolaw
+
+	* bin/psmon-config (1.1): Adding
+
+2005-02-17 17:42  nicolaw
+
+	* bin/strip_pod.pl (1.2): Output pod to STDERR and code to STDOUT
+
+2005-02-17 17:35  nicolaw
+
+	* bin/strip_pod.pl (1.1): Adding for development aid
+
+2005-01-14 01:56  nicolaw
+
+	* support/psmon.html (1.8): Updated HTML from new POD
+
+2005-01-14 01:56  nicolaw
+
+	* bin/psmon (1.12): Typo  -  missing eol ;
+
+2004-11-11 23:08  nicolaw
+
+	* bin/psmon (1.11): Interim update migrating to cleaner OO syntax
+
+2004-10-12 13:55  nicolaw
+
+	* bin/psmon (1.10): Added better handling for figuring out where to
+	  write a valid pid file so that multiple instances can be run at once
+	  on a multiuser system.  Added better handling to figure out which
+	  config file to use, and when to only scan for the local user's
+	  processes instead of everyones
+
+2004-10-12 11:47  nicolaw
+
+	* META.yml (1.8), install.sh (1.7), support/install.sh (1.7),
+	  support/psmon.html (1.7): Fixed typo
+
+2004-08-02 04:56  nicolaw
+
+	* bin/psmon (1.9): Corrected some problems with imported symbols
+	  and module loading on some systems and versions of perl.
+
+2004-08-01 13:09  nicolaw
+
+	* bin/psmon (1.7): Added OSNAME and SCRIPT CATEGORIES for CPAN
+	  script archive indexing
+
+2004-08-01 11:31  nicolaw
+
+	* install.sh (1.1): Symlink
+
+2004-08-01 11:29  tag rel-1-0-6
+
+2004-08-01 11:29  nicolaw
+
+	* COPYING (1.1.1.1), Changes (1.1.1.1), INSTALL (1.1.1.1), MANIFEST
+	  (1.1.1.1), META.yml (1.1.1.1), Makefile.PL (1.1.1.1), README
+	  (1.1.1.1), TODO (1.1.1.1), bin/psmon (1.1.1.1), etc/psmon.conf
+	  (1.1.1.1), support/commit.sh (1.1.1.1), support/install.sh
+	  (1.1.1.1), support/perldoc.css (1.1.1.1), support/psmon.html
+	  (1.1.1.1) (utags: rel-1-0-6): Initial import in to new CVS
+	  repository after the old one was lost
+
+2004-08-01 11:29  nicolaw
+
+	* COPYING (1.1), Changes (1.1), INSTALL (1.1), MANIFEST (1.1),
+	  META.yml (1.1), Makefile.PL (1.1), README (1.1), TODO (1.1),
+	  bin/psmon (1.1), etc/psmon.conf (1.1), support/commit.sh (1.1),
+	  support/install.sh (1.1), support/perldoc.css (1.1),
+	  support/psmon.html (1.1): Initial revision
+

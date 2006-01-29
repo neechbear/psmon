@@ -1,0 +1,650 @@
+
+
+=head1 NAME
+
+psmon - Process Table Monitoring Script
+
+=head1 VERSION
+
+$Id: psmon.pod,v 1.2 2005/05/29 10:19:10 nicolaw Exp $
+
+=head1 SYNOPSIS
+
+ Syntax: psmon [--conf=filename] [--daemon] [--cron] [--user=user] [--nouser]
+               [--adminemail=emailaddress] [--dryrun] [--verbose]
+               [--help] [--version]
+
+    --help            Display this help
+    --version         Display full version information
+    --dryrun          Dryrun (do not actually kill or spawn and processes)
+    --daemon          Spawn in to background daemon
+    --cron            Disables 'already running' errors with the --daemon option
+    --conf=str        Specify alternative config filename
+    --user=str        Only scan the process table for processes running as str
+    --nouser          Force scanning for all users when not run as superuser
+    --adminemail=str  Force all notification emails to be sent to str
+    --verbose         Output more verbose information
+
+=head2 Crontab
+
+Single user account crontab operation:
+
+    MAILTO="nicolaworthington@msn.com"
+    HOME=/home/nicolaw
+    USER=nicolaw
+    */5 * * * *    psmon --daemon --cron --conf=$HOME/etc/psmon.conf --user=$USER --adminemail=$MAILTO
+
+Regular system-wide call from cron:
+
+    */5 * * * *    psmon --daemon --cron
+
+Only check processes during working office hours:
+
+    * 9-17 * * *   psmon
+
+=head1 DESCRIPTION
+
+This script monitors the process table using Proc::ProcessTable, and
+will respawn or kill processes based on a set of rules defined in an
+Apache style configuration file.
+
+Processes will be respawned if a spawn command is defined for a process,
+and no occurances of that process are running. If the --user command line
+option is specified, then the process will only be spawned if no instances
+are running as the specified userid.
+
+Processes can be killed off if they have been running for too long,
+use too much CPU or memory resources, or have too many concurrent
+versions running. Exceptions can be made to kill rulesets using the
+I<pidfile> and I<lastsafepid> directives.
+
+If a PID file is declared for a process, psmon will never kill the
+process ID that is contained within the pid file. This is useful if for
+example, you have a script which spawns hundreds of child processes
+which you may need to automatically kill, but you do not want to kill
+the parent process.
+
+Any actions performed will be logged to the DAEMON syslog facility by default.
+There is support to optionally also send notifications emails to an
+administrator on a global or pre-rule basis.
+
+=head1 OPERATION
+
+=over 4
+
+=item --dryrun
+
+Execute a dry-run (do not actually kill or spawn and processes).
+
+=item --conf=I<filename>
+
+Specify alternative config filename. The configuration file defaults
+to /etc/psmon.conf when running as superuser, or ~/etc/psmon.conf when
+running as a non-superuser.
+
+=item --daemon
+
+Spawn in to background daemon.
+
+=item --cron
+
+Disables already running warnings when trying to launch as another daemon.
+
+=item --user=I<user>
+
+Only scan the process table for processes running under this username.
+
+=item --nouser
+
+Force scanning for all users when not run as superuser. By default psmon
+will only scan processes belonging to the current user for non-superusers.
+
+=item --adminemail=I<emailaddress>
+
+Force all notification emails to be sent to this email address.
+
+=item --verbose
+
+Output more verbose information.
+
+=back
+
+=head1 INSTALLATION
+
+In addition to Perl 5.005_03 or higher, the following Perl modules are
+required:
+
+    Getopt::Long
+    Config::General
+    POSIX
+    Proc::ProcessTable
+    Net::SMTP
+    Unix::Syslog
+    File::Basename
+
+The POSIX module is usually supplied with Perl as standard, as is
+Getopt::Long. All these modules can be obtained from CPAN. Visit
+http://search.span.org and http://www.cpan.org for further details.
+For the lazy people reading this, you can try the
+following command to install these modules:
+
+    for m in Getopt::Long Config::General POSIX Proc::ProcessTable \
+	 Net::SMTP Unix::Syslog;do perl -MCPAN -e"install $m";done
+
+Alternatively you can run the install.sh script which comes in the
+distribution tarball. It will attempt to install the right modules,
+install the script and configuration file, and generate UNIX man page
+documentation.
+
+By default psmon will look for its runtime configuration in /etc/psmon.conf,
+although this can be defined as otherwise from the command line. For system
+wide installations it is reccomended that you install your psmon in to the
+default location.
+
+
+
+=head1 CONFIGURATION
+
+The default configuration file location is /etc/psmon.conf. A different
+configuration file can be declared from the command line.
+
+Syntax of the configuration file is based upon that which is used by
+Apache. Each process to be monitored is declared with a Process scope
+directive like this example which monitors the OpenSSH daemon:
+
+    <Process sshd>
+        spawncmd    /sbin/service sshd start
+        pidfile     /var/run/sshd.pid
+        instances   50
+        pctcpu      90
+    </Process>
+
+There is a special I<*> process scope which applies to I<all> running
+processes. This special scope should be used with extreme care. It does
+not support the use of the I<spawncmd>, I<pidfile>, I<instances> or I<ttl>
+directivers. A typical example of this scope might be as follows:
+
+    <Process *>
+        pctcpu    95
+        pctmem    80
+    </Process>
+
+Global directives which are not specific to any one process should be placed
+outside of any Process scopes.
+
+=head2 DIRECTIVES
+
+=over 4
+
+=item Facility
+
+Defines which syslog facility to log to. Valid options are as follows;
+LOG_KERN, LOG_USER, LOG_MAIL, LOG_DAEMON, LOG_AUTH, LOG_SYSLOG, LOG_LPR,
+LOG_NEWS, LOG_UUCP, LOG_CRON, LOG_LOCAL0, LOG_LOCAL1, LOG_LOCAL2,
+LOG_LOCAL3, LOG_LOCAL4, LOG_LOCAL5, LOG_LOCAL6 and LOG_LOCAL7. Defaults
+to LOG_DAEMON.
+
+=item LogLevel
+
+Defines the loglevel priority that notifications to syslog will be
+marked as. Valid options are as follows; LOG_EMERG, LOG_ALERT, LOG_CRIT,
+LOG_ERR, LOG_WARNING, LOG_NOTICE, LOG_INFO and LOG_DEBUG. The log level
+used by a notification for any failed action will automatically be
+raised to the next level in order to highlight the failure. May be also be used
+in a Process scope which will take priority over a global declaration.
+Defaults to LOG_NOTICE.
+
+=item KillLogLevel (previously KillPIDLogLevel)
+
+The same as the loglevel directive, but only applies to process kill actions.
+Takes priority over the loglevel directive. May be also be used in a
+Process scope which will take priority over a global declaration.
+Undefined by default.
+
+=item SpawnLogLevel
+
+The same as the loglevel directive, but only applies to process spawn actions.
+Takes priority over the loglevel directive. May be also be used in a
+Process scope which will take priority over a global declaration.
+Undefined by default.
+
+=item AdminEmail
+
+Defines the email address where notification emails should be sent to.
+May be also be used in a Process scope which will take priority over a
+global declaration. Defaults to root@localhost.
+
+=item NotifyEmailFrom
+
+Defines the email address that notification email should be addresses
+from. Defaults to <username>@I<hostname>.
+
+=item Frequency
+
+Defines the frequency of process table queries. Defaults to 60 seconds.
+
+=item LastSafePID
+
+When defined, psmon will never attempt to kill a process ID which is
+numerically less than or equal to the value defined by lastsafepid. It
+should be noted that psmon will never attempt to kill itself, or a process ID
+less than or equal to 1. Defaults to 100.
+
+=item ProtectSafePIDsQuietly
+
+Accepts a boolean value of On or Off. Surpresses all notifications of
+preserved process IDs when used in conjunction with the I<lastsafepid>
+directive. Defaults to Off.
+
+=item SMTPHost
+
+Defines the IP address or hostname of the SMTP server to used to send
+email notifications. Defaults to localhost.
+
+=item SMTPTimeout
+
+Defines the timeout in seconds to be used during SMTP connections.
+Defaults to 20 seconds.
+
+=item SendmailCmd
+
+Defines the sendmail command to use to send notification emails if there
+is a failure with the SMTP connection to the host defined by smtphost.
+Defaults to '/usr/sbin/sendmail -t'.
+
+=item Dryrun
+
+Forces this psmon to as if the --dryrun command line switch had specified.
+This is useful if you want to force a specific configuration file to only
+report and never actually take any automated action.
+
+=item NotifyDetail
+
+Defines the verbosity of notification emails which are sent. Can be set
+to 'Simple', 'Verbose' or 'Debug'. Defaults to 'Verbose'. This function
+will be removed soon. It is unnecessary bloat and is not very portable.
+
+=item NeverKillPID
+
+Accepts a space delimited list of PIDs which will never be killed.
+Defaults to 1.
+
+=item NeverKillProcessName
+
+Accepts a space deliomited list of process names which will never be
+killed. Defaults to 'kswapd kupdated mdrecoveryd'.
+
+=back
+
+=head2 PROCESS SCOPE DIRECTIVES
+
+=over 4
+
+=item SpawnCmd
+
+Defines the full command line to be executed in order to respawn a dead
+process.
+
+=item KillCmd
+
+Defines the full command line to be executed in order to gracefully
+shutdown or kill a rogue process. If the command returns a boolean true
+exit status then it is assumed that the command failed to execute
+sucessfully. If no KillCmd is specified or the command fails, the
+process will be killed by sending a SIGKILL signal with the standard
+kill() function. Undefined by default.
+
+=item PIDFile
+
+Defines the full path and filename of a file created by a process which
+contain it's main parent process ID.
+
+=item TTL
+
+Defines a maximum time to live (in seconds) of a process. The process
+will be killed once it has been running longer than this value, and
+it's process ID isn't contained in the defined pidfile.
+
+=item PctCpu
+
+Defines a maximum allowable percentage of CPU time a process may use.
+The process will be killed once it's CPU usage exceeds this threshold
+and it's process ID isn't contained in the defined pidfile.
+
+=item PctMem
+
+Defines a maximum allowable percentage of total system memory a process
+may use. The process will be killed once it's memory usage exceeds this
+threshold and it's process ID isn't contained in the defined pidfile.
+
+=item Instances
+
+Defines a maximum number of instances of a process which may run. The
+process will be killed once there are more than this number of occurances
+running, and it's process ID isn't contained in the defined pid file.
+
+=item NoEmailOnKill
+
+Accepts a boolean value of True or False. Surpresses process killing
+notification emails for this process scope. Defaults to False.
+
+=item NoEmailOnSpawn
+
+Accepts a boolean value of True or False. Surpresses process spawning
+notification emails for this process scope. Defaults to False.
+
+=item NoEmail
+
+Accepts a boolean value of True or False. Surpresses all notification
+emails for this process scope. Defaults to False.
+
+=back
+
+=head2 EXAMPLES
+
+    <Process syslogd>
+        spawncmd       /sbin/service syslogd restart
+        pidfile        /var/run/syslogd.pid
+        instances      1
+        pctcpu         70
+        pctmem         30
+    </Process>
+
+Syslog is a good example of a process which can get a little full
+of itself under certian circumstances, and excessively hog CPU and
+memory. Here we will kill off syslogd processes if it exceeds 70%
+CPU or 30% memory utilization.
+
+Older running copies of syslogd will be killed if they are running,
+while leaving the most recently spawned copy which will be listed in
+the PID file defined.
+
+    <Process httpd>
+        spawncmd      /sbin/service httpd restart
+        pidfile       /var/run/httpd.pid
+        loglevel      critical
+        adminemail    pager@noc.company.com
+    </Process>
+
+Here we are monitoring Apache to ensure that it is restarted if
+it dies. The pidfile directive in this example is actually
+redundant because we have not defined any rule where we should
+consider killing any httpd processes.
+
+All notifications relating to this process will be logged with the
+syslog priority of critical (LOG_CRIT), and all emailed to
+pager@noc.company.com which could typically forward to a pager.
+
+Any failed attempts to kill or restart a process will automatically
+be logged as a syslog priority one level higher than that specified.
+If a restart of Apache were to fail in this example, a wall
+notification would be broadcast to all interactive terminals
+connected to the machine, since the next log priority up from
+LOG_CRIT is LOG_EMERG.
+
+    <Process find>
+        noemail    True
+        ttl        3600
+    </Process>
+
+Kill old find processes which have been running for over an hour.
+Do not send an email notification since it's not too important.
+
+
+
+=head1 SIGNALS
+
+=over 4
+
+=item HUP
+
+Forces an immediate reload of the configuration file. You should
+send the HUP signal when you are running psmon as a background
+daemon and have altered the psmon.conf file.
+
+=item USR1
+
+Forces an immediate scan of the process table.
+
+=back
+
+=head1 EXIT CODES
+
+=over 4
+
+=item Value 0: Exited gracefully
+
+The program exited gracefully.
+
+=item Value 2: Failure to lookup UID for username
+
+The username specified by the --user command line option did not resolve to a valid
+UID.
+
+=item Value 3: Configuration file is disabled
+
+The configuration file is disabled. (It contains an active 'Disabled' directive).
+
+=item Value 4: Configuration file does not exist
+
+The specified configuration file, (default or user specified) does not exist.
+
+=item Value 5: Unable to open PID file handle
+
+Failed to open a read-only file handle for the runtime PID file.
+
+=item Value 6: Failed to fork
+
+An error occured while attempting to fork the child background daemon process.
+
+=item Value 7: Unable to open PID file handle
+
+Failed to open a write file handle for the runtime PID file.
+
+=item Value 8: Failure to load Perl module
+
+One or more Perl module could not be loaded. This usually happens when one of the
+required Perl modules which psmon depends upon is not installed or could not be located
+in the Perl LIB search path.
+
+=back
+
+=head1 PERFORMANCE
+
+psmon is not especially fast. Much of it's time is spent reading the process table.
+If the process table is particularly large this can take a number of seconds.
+Although is rarely a major problem on todays speedy machines, I have run a few tests
+so you take look at the times and decide if you can afford the wait.
+
+ CPU             OS              Open Files/Procs    1m Load    Real Time
+ PIII 1.1G       Mandrake 9.0         10148 / 267       0.01     0m0.430s
+ PIII 1.2G       Mandrake 9.0         16714 / 304       0.44     0m0.640s
+ Celeron 500     Red Hat 6.1           1780 /  81       1.27     0m0.880s
+ PII 450         Red Hat 6.0            300 /  23       0.01     0m1.050s
+ 2x Xeon 1.8G    Mandrake 9.0         90530 / 750       0.38     0m1.130s
+ Celeron 500     Red Hat 6.1           1517 /  77       1.00     0m1.450s
+ PIII 866        Red Hat 8.0           3769 /  76       0.63     0m1.662s
+ PIII 750        Red Hat 6.2            754 /  35       3.50     0m2.170s
+
+(Figures are accurate as of release 1.0.3).
+
+These production machines were running the latest patched stock distribution kernels.
+I have listed the total number of open file descriptors, processes running and 1 minute
+load average to give you a slightly better context of the performance.
+
+
+
+=head1 SUBROUTINES
+
+=over 4
+
+=item check_processtable()
+
+Reads the current process table, checks and then executes any appropriate
+action to be taken. Does not accept any paramaters.
+
+
+
+=item slay_process()
+
+Attempts to kill a process with it's killcmd, or failing that using the kill() function.
+Accepts the process name, syslog log level, email notification to address and a reference
+to the %slay hash.
+
+
+
+=item print_init_style()
+
+Prints a Red Hat sysvinit style status message. Accepts an array of messages
+to display in sequence.
+
+
+
+=item spawn_process()
+
+Attempts to spawn a process. Accepts the process name, syslog log level, mail
+notification to address and spawn command.
+
+
+
+=item display_help()
+
+Displays command line help.
+
+
+
+=item parse_user_to_run_as()
+
+Determine what UID to scan for in the process table.
+
+
+
+=item read_config()
+
+Reads in runtime configuration options.
+
+
+
+=item isnumeric()
+
+An evil bastard fudge to ensure that we're only dealing with numerics when
+necessary, from the config file and Proc::ProcessTable scan.
+
+
+
+=item loglevel()
+
+Accepts a syslog loglevel keyword and returns the associated constant integer.
+
+
+
+=item logfacility()
+
+Accepts a syslog facility keyword and returns the associated constant integer.
+
+
+
+=item alert()
+
+Logs a message to syslog using log() and sends a notification email using
+sendmail().
+
+
+
+=item log()
+
+Logs messages to DAEMON facility in syslog. Accepts a log
+level and message array. Will terminate the process if it is
+asked to log a message of a log level 2 or less (LOG_EMERG,
+LOG_ALERT, LOG_CRIT).
+
+
+
+=item sendmail()
+
+Sends email notifications of syslog messages, called by alert().
+Accepts sending email address, recipient email address, short
+message subject and an optional detailed message body array.
+
+
+
+=item daemonize()
+
+Launches the process in to the background. Checks to see if there is already an
+instance running.
+
+
+
+=item display_version()
+
+Displays complete version, author and license information.
+
+=back
+
+
+
+=head1 BUGS
+
+Hopefully none. ;-) Send any bug reports to me at nicolaworthington@msn.com
+along with any patches and details of how to replicate the problem.
+Please only send reports for bugs which can be replicated in the
+I<latest> version of the software. The latest version can always be
+found at http://www.nicolaworthington.com
+
+=head1 TODO
+
+The following functionality will be added soon:
+
+=over 4
+
+=item Code cleanup
+
+The code needs to be cleaned up and made more efficient.
+
+=item killperprocessname directive
+
+Will accept a boolean value. If true, only 1 process per process scope
+will ever be killed, instead of all process IDs matching kill rules.
+This should be used in conjunction with the new killcmd directive. For
+example, you may define that a database daemon may never take up more
+than 90% CPU time, and it runs many children processes. If it exceeds
+90% CPU time, you want to issue ONE restart command in order to stop and
+then start all the database processes in one go.
+
+=item time period limited rules
+
+Functionality to limit validity of process scopes to only be checked
+between defined time periods. For example, only check that httpd is running
+between the hours of 8am and 5pm on Mondays and Tuesdays.
+
+=back
+
+=head1 SEE ALSO
+
+nsmon
+
+=head1 LICENSE
+
+Written by Nicola Worthington, <nicolaworthington@msn.com>.
+Copyright (C) 2002,2003,2004 Nicola Worthington.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02110-1301, USA.
+
+=head1 AUTHOR
+
+Nicola Worthington <nicolaworthington@msn.com>
+
+http://www.nicolaworthington.com
+

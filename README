@@ -1,0 +1,20 @@
+psmon is a Perl script which can be run as a stand alone program or a
+fully functional background daemon, capable of logging to syslog with
+customisable email notification facilities.
+
+The user defines a set of rules in an Apache-style plain text
+configuration file. These rules describe what processes should always be
+running on the system, and any limitations on concurrent instances, TTL
+and maximum CPU/memory usage of processes. psmon scans the UNIX process
+table and, using the set of rules defined in the configuration file, will
+respawn any dead processes, and/or slay or "deal with" any aggressive or
+illegal processes.
+
+Originally written and designed for use by a UK ISP, it is designed to be
+as flexible as posible, for use on a per-user, or system-wide server
+basis.
+
+For further detailed information on what psmon can do for you, how
+flexible it is and a list of all its features, please read the
+documentation. Please feel free to email me at nicolaw@lilacup.2x4b.com
+with any questions, suggestions or bug reports you may have.

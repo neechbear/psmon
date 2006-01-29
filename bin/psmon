@@ -1,0 +1,1901 @@
+#!/usr/bin/perl -w
+############################################################
+#
+#   $Id: psmon,v 1.39 2005/12/30 13:26:23 nicolaw Exp $
+#   psmon - Process Table Monitor Script
+#
+#   Copyright 2002,2003,2004,2005 Nicola Worthington
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
+#
+############################################################
+
+package PSMon;
+# vim:ts=4:sw=4:tw=78
+
+use strict;
+use POSIX ();
+use Proc::ProcessTable ();
+use File::Basename ();
+
+use constant DEBUG => $ENV{'PSMon_DEBUG'} ? 1 : 0;
+use constant PREFIX => '';
+
+use vars qw($VERSION $SELF); 
+
+$| = 1; # Autoflush output
+($SELF = $0)	=~ s|^.*/||;
+$VERSION = sprintf('%d.%02d', q$Revision: 1.39 $ =~ /(\d+)/g);
+
+############################################################
+
+my $cfg = PSMon::Config->new(default_config_file => sprintf('%s/etc/psmon.conf',PREFIX));
+$cfg->parse_command_line();
+
+# Display help
+if ($cfg->help) {
+	eval {
+		require Pod::Usage;
+		Pod::Usage::pod2usage(-verbose => 2);
+	};
+	if ($@) {
+		print <<__HELP__;
+ Syntax: psmon [--help] [--version] [--dryrun] [--daemon] [--cron]
+               [--conf=filename] [--user=user] [--nouser]
+               [--adminemail=emailaddress] [--verbose]
+
+    --help            Display this help
+    --version         Display full version information
+    --dryrun          Dry run (do not actually kill or spawn any processes)
+    --daemon          Spawn in to background daemon
+    --cron            Disables 'already running' errors with the --daemon option
+    --conf=str        Specify alternative config filename
+    --user=str        Only scan the process table for processes running as str
+    --nouser          Force scanning for all users when not run as superuser
+    --adminemail=str  Force all notification emails to be sent to str
+    --verbose         Output more verbose information
+__HELP__
+	}
+	exit 0;
+}
+
+# Display version
+display_version(0) if $cfg->version;
+
+# Verbose output of what user we're scanning for
+if ($cfg->verbose && defined $cfg->uid) {
+	my $login = scalar getpwuid($cfg->uid);
+	printf("Scanning for processes owned by UID %s (%s)\n", $cfg->uid, $login);
+}
+
+# Open default syslog facility with TTY output
+print "Opening default syslog facility\n" if $cfg->verbose;
+my $msg = PSMon::Logging->new(SELF => $SELF);
+
+# Bork if --user was specified on the command line, but we haven't sucessfully translated it
+if ($cfg->user && !defined $cfg->uid) {
+	$msg->Log('LOG_CRIT', sprintf("Invalid user specified: '%s'",$cfg->user));
+	exit 2;
+}
+
+# Bork is there is no configuration file
+unless (-e $cfg->config_file) {
+	$msg->Log('LOG_CRIT', sprintf("Configuration file %s does not exist\n", $cfg->config_file));
+	exit 4;
+}
+
+# Verbose output about the config file
+if ($cfg->verbose) {
+	printf("Using %s configuration file\n",$cfg->config_file);
+	print "Reading configuration file\n";
+}
+
+# Read the config file
+$cfg->read_config($cfg->config_file);
+
+# Give PSMon::Logging the newly read configuration values
+$msg->set(
+		defaultemailmethod	=> $cfg->config('defaultemailmethod'),
+		notifyemailfrom		=> $cfg->config('notifyemailfrom'),
+		sendmailcmd			=> $cfg->config('sendmailcmd'),
+		smtphost			=> $cfg->config('smtphost'),
+		smtptimeout			=> $cfg->config('smtptimeout'),
+		dryrun				=> $cfg->dryrun,
+	);
+
+# Bork if the config file is disabled
+if ($cfg->config('disabled')) {
+	$msg->Log('LOG_CRIT', sprintf("Your configuration file '%s' is disabled. Remove the 'Disabled True' directive from the file.", $cfg->config_file));
+	exit 3;
+}
+
+############################################################
+
+# Run a single check
+unless ($cfg->daemon) {
+	# Reopen syslog without PERROR (no output to terminal)
+	print "Reopening syslog facility\n" if $cfg->verbose;
+	$msg->closelog();
+	$msg->openlog($cfg->config('facility'));
+
+	check_processtable(defined $cfg->uid ? $cfg->uid : '');
+
+# Run as a daemon
+} else {
+	# Read the config file and setup signal handlers
+	$SIG{'HUP'} = sub {
+			$msg->Log('LOG_NOTICE', 'Received SIGHUP; reloading configuration');
+			$cfg->read_config($cfg->config_file);
+		};
+	$SIG{'USR1'} = sub {
+			$msg->Log('LOG_NOTICE', 'Received SIGUSR1; checking process table immediately');
+			check_processtable(defined $cfg->uid ? $cfg->uid : '');
+		};
+
+	# PID file
+	my $pidfile = $cfg->pid_file;
+	print "Using PID file $pidfile\n" if $cfg->verbose;
+
+	# Launch in to the background
+	daemonize($pidfile);
+
+	# Reopen syslog without PERROR (no output to terminal)
+	print "Reopening syslog facility\n" if $cfg->verbose;
+	$msg->closelog();
+	$msg->openlog($cfg->config('facility'));
+
+	# Die if you remove the runtime PID file 
+	while (-f $pidfile) {
+		check_processtable(defined $cfg->uid ? $cfg->uid : '');
+		sleep $cfg->config('frequency');
+	}
+}
+
+# Finish
+$msg->Log('LOG_NOTICE', "Terminating.\n");
+$msg->closelog();
+exit;
+
+############################################################
+
+
+
+
+
+
+
+
+
+
+=pod
+
+=head1 NAME
+
+psmon - Process Table Monitoring Script
+
+=head1 VERSION
+
+$Id: psmon,v 1.39 2005/12/30 13:26:23 nicolaw Exp $
+
+=head1 SYNOPSIS
+
+ Syntax: psmon [--help] [--version] [--dryrun] [--daemon] [--cron]
+               [--conf=filename] [--user=user] [--nouser]
+               [--adminemail=emailaddress] [--verbose]
+
+    --help            Display this help
+    --version         Display full version information
+    --dryrun          Dry run (do not actually kill or spawn any processes)
+    --daemon          Spawn in to background daemon
+    --cron            Disables 'already running' errors with the --daemon option
+    --conf=str        Specify alternative config filename
+    --user=str        Only scan the process table for processes running as str
+    --nouser          Force scanning for all users when not run as superuser
+    --adminemail=str  Force all notification emails to be sent to str
+    --verbose         Output more verbose information
+
+=head2 crontab
+
+Single user account crontab operation:
+
+    MAILTO="nicolaw@cpan.org"
+    HOME=/home/nicolaw
+    USER=nicolaw
+    */5 * * * * psmon --daemon --cron --conf=$HOME/etc/psmon.conf --user=$USER --adminemail=$MAILTO
+
+Regular system-wide call from cron every 10 minutes to ensure that psmon is still running as a daemon:
+
+    0,10,20,30,40,50 * * * * psmon --daemon --cron
+
+Only check processes during working office hours:
+
+    * 9-17 * * * psmon
+
+=head1 DESCRIPTION
+
+This script monitors the process table using Proc::ProcessTable, and
+will respawn or kill processes based on a set of rules defined in an
+Apache style configuration file.
+
+Processes will be respawned if a spawn command is defined for a process,
+and no occurrences of that process are running. If the --user command line
+option is specified, then the process will only be spawned if no instances
+are running as the specified userid.
+
+Processes can be killed off if they have been running for too long,
+use too much CPU or memory resources, or have too many concurrent
+versions running. Exceptions can be made to kill rulesets using the
+I<PIDFile> and I<LastSafePID> directives.
+
+If a PID file is declared for a process, psmon will never kill the
+process ID that is contained within the pid file. This is useful if for
+example, you have a script which spawns hundreds of child processes
+which you may need to automatically kill, but you do not want to kill
+the parent process.
+
+Any actions performed will be logged to the DAEMON syslog facility by default.
+There is support to optionally also send notifications emails to an
+administrator on a global or pre-rule basis.
+
+=head1 OPERATION
+
+=over 4
+
+=item --help
+
+Display this help.
+
+=item --version
+
+Display full version information.
+
+=item --dryrun
+
+Execute a dry-run (do not actually kill or spawn and processes).
+
+=item --daemon
+
+Spawn in to background daemon.
+
+=item --cron
+
+Disables already running warnings when trying to launch as another daemon.
+
+=item --conf=I<filename>
+
+Specify alternative config filename. The configuration file defaults
+to /etc/psmon.conf when running as superuser, or ~/etc/psmon.conf when
+running as a non-superuser.
+
+=item --user=I<user>
+
+Only scan the process table for processes running under this username.
+
+=item --nouser
+
+Force scanning for all users when not run as superuser. By default psmon
+will only scan processes belonging to the current user for non-superusers.
+
+=item --adminemail=I<emailaddress>
+
+Force all notification emails to be sent to this email address. This
+option will override all I<AdminEmail> directives within the configuration
+file.
+
+=item --verbose
+
+Output more verbose information.
+
+=back
+
+=head1 INSTALLATION
+
+In addition to Perl 5.005_03 or higher, the following Perl modules are
+required:
+
+    Proc::ProcessTable
+    Config::General
+    Getopt::Long
+    POSIX
+    File::Basename
+
+These two additional modules are not required, but will provide enhanced
+functionality if present.
+
+    Net::SMTP
+    Unix::Syslog
+
+The POSIX module is usually supplied with Perl as standard, as is
+File::Basename. All these modules can be obtained from CPAN.
+Visit http://search.span.org and http://www.cpan.org for further details.
+For the lazy people reading this, you can try the following command to
+install these modules:
+
+    for m in Config::General Proc::ProcessTable Net::SMTP \
+        Unix::Syslog Getopt::Long; do perl -MCPAN -e"install $m";done
+
+Alternatively you can run the install.sh script which comes in the
+distribution tarball. It will attempt to install the right modules,
+install the script and configuration file, and generate UNIX man page
+documentation.
+
+By default psmon will look for its runtime configuration in /etc/psmon.conf,
+although this can be defined as otherwise from the command line. For system
+wide installations it is recommended that you install your psmon in to the
+default location.
+
+=head1 CONFIGURATION
+
+The default configuration file location is /etc/psmon.conf. A different
+configuration file can be declared from the command line. You will find
+an example configuration file supplied in the etc/ directory of the
+distribution tarball. It is recommended that you use this as a guide to
+writing your own configuration file by hand. Alternatively you can use
+the B<psmon-config> script which will interactively create a configuration
+for you.
+
+Syntax of the configuration file is based upon that which is used by
+Apache. Each process to be monitored is declared with a Process scope
+directive like this example which monitors the OpenSSH daemon:
+
+    <Process sshd>
+        spawncmd    /sbin/service sshd start
+        pidfile     /var/run/sshd.pid
+        instances   50
+        pctcpu      90
+    </Process>
+
+There is a special I<*> process scope which applies to I<all> running
+processes. This special scope should be used with extreme care. It does
+not support the use of the I<SpawnCMD>, I<PIDFile>, I<Instances> or I<TTL>
+directives. A typical example of this scope might be as follows:
+
+    <Process *>
+        pctcpu    95
+        pctmem    80
+    </Process>
+
+Global directives which are not specific to any one process should be placed
+outside of any Process scopes.
+
+=head2 DIRECTIVES
+
+Configuration directives are not case sensitive, but the values that they
+define are.
+
+=over 4
+
+=item AdminEmail
+
+Defines the email address where notification emails should be sent to.
+May be also be used in a process scope which will take priority over a
+global declaration. Defaults to root@localhost.
+
+=item DefaultEmailMethod
+
+Defines which method should be used by default to try and send notification
+emails. Legal values are 'SMTP' or 'sendmail'. Defaults to 'sendmail'.
+
+=item Dryrun
+
+Forces psmon to act in the same way as if the --dryrun command line switch
+had specified. This is useful if you want to force a specific configuration
+file to only report and never actually take any automated action.
+
+=item Facility
+
+Defines which syslog facility to log to. Valid options are as follows;
+LOG_KERN, LOG_USER, LOG_MAIL, LOG_DAEMON, LOG_AUTH, LOG_SYSLOG, LOG_LPR,
+LOG_NEWS, LOG_UUCP, LOG_CRON, LOG_LOCAL0, LOG_LOCAL1, LOG_LOCAL2,
+LOG_LOCAL3, LOG_LOCAL4, LOG_LOCAL5, LOG_LOCAL6 and LOG_LOCAL7. This
+functionality requires the Unix::Syslog module. Defaults to LOG_DAEMON.
+
+=item Frequency
+
+Defines the frequency of process table queries. Defaults to 60 seconds.
+
+=item KillLogLevel (previously KillPIDLogLevel)
+
+The same as the loglevel directive, but only applies to process kill actions.
+Takes priority over the loglevel directive. May be also be used in a
+Process scope which will take priority over a global declaration.
+Undefined by default.
+
+=item LastSafePID
+
+When defined, psmon will never attempt to kill a process ID which is
+numerically less than or equal to the value defined by lastsafepid. It
+should be noted that psmon will never attempt to kill itself, or a process ID
+less than or equal to 1. Defaults to 100.
+
+=item LogLevel
+
+Defines the loglevel priority that notifications to syslog will be
+marked as. Valid options are as follows; LOG_EMERG, LOG_ALERT, LOG_CRIT,
+LOG_ERR, LOG_WARNING, LOG_NOTICE, LOG_INFO and LOG_DEBUG. The log level
+used by a notification for any failed action will automatically be
+raised to the next level in order to highlight the failure. May be also be used
+in a Process scope which will take priority over a global declaration. This
+functionality requires the Unix::Syslog module. Defaults to LOG_NOTICE.
+
+=item NeverKillPID
+
+Accepts a space delimited list of PIDs which will never be killed.
+Defaults to 1.
+
+=item NeverKillProcessName
+
+Accepts a space delimited list of process names which will never be
+killed. Defaults to 'devfsadmd kswapd kupdated mdrecoveryd pageout sched init fsflush'.
+
+=item NotifyEmailFrom
+
+Defines the email address that notification email should be addresses
+from. Defaults to <username>@I<hostname>.
+
+=item SendmailCmd
+
+Defines the sendmail command to use to send notification emails if there
+is a failure with the SMTP connection to the host defined by I<SMTPHost>.
+Defaults to '/lib/sendmail -t' or '/usr/sbin/sendmail -t'.
+
+=item SMTPHost
+
+Defines the IP address or hostname of the SMTP server to used to send
+email notifications. This functionality requires the Net::SMTP module.
+Defaults to localhost.
+
+=item SMTPTimeout
+
+Defines the timeout in seconds to be used during SMTP connections. This
+functionality requires the Net::SMTP module. Defaults to 20 seconds.
+
+=item SpawnLogLevel
+
+The same as the loglevel directive, but only applies to process spawn actions.
+Takes priority over the loglevel directive. May be also be used in a
+Process scope which will take priority over a global declaration.
+Undefined by default.
+
+=item ProtectSafePIDsQuietly
+
+Accepts a boolean value of On or Off. Suppresses all notifications of
+preserved process IDs when used in conjunction with the I<LastSafePID>
+directive. Defaults to Off.
+
+=back
+
+=head2 PROCESS SCOPE DIRECTIVES
+
+=over 4
+
+=item AdminEmail
+
+Defines the email address where notification emails should be sent to.
+Takes priority within the process scope over the global I<AdminEmail> directive,
+but not over the I<AdminEmail> command line option.
+
+=item Instances
+
+Defines a maximum number of instances of a process which may run. The
+process will be killed once there are more than this number of occurrences
+running, and its process ID isn't contained in the defined pid file.
+
+=item KillCmd
+
+Defines the full command line to be executed in order to gracefully
+shutdown or kill a rogue process. If the command returns a boolean true
+exit status then it is assumed that the command failed to execute
+successfully. If no KillCmd is specified or the command fails, the
+process will be killed by sending a SIGKILL signal with the standard
+kill() function. Undefined by default.
+
+=item NoEmail
+
+Accepts a boolean value of True or False. Supresses all notification
+emails for this process scope. Defaults to False.
+
+=item NoEmailOnKill
+
+Accepts a boolean value of True or False. Supresses process killing
+notification emails for this process scope. Defaults to False.
+
+=item NoEmailOnSpawn
+
+Accepts a boolean value of True or False. Supresses process spawning
+notification emails for this process scope. Defaults to False.
+
+=item PctCpu
+
+Defines a maximum allowable percentage of CPU time a process may use.
+The process will be killed once its CPU usage exceeds this threshold
+and its process ID isn't contained in the defined pidfile.
+
+=item PctMem
+
+Defines a maximum allowable percentage of total system memory a process
+may use. The process will be killed once its memory usage exceeds this
+threshold and its process ID isn't contained in the defined pidfile.
+
+=item PIDFile
+
+Defines the full path and filename of a file created by a process which
+contain its main parent process ID. Psmon will not kill the PID number
+which is contained within the I<PIDFile>.
+
+=item SpawnCmd
+
+Defines the full command line to be executed in order to respawn a dead
+process.
+
+=item TTL
+
+Defines a maximum time to live (in seconds) of a process. The process
+will be killed once it has been running longer than this value, and
+its process ID isn't contained in the defined pidfile.
+
+=back
+
+=head2 EXAMPLES
+
+    <Process syslogd>
+        spawncmd       /sbin/service syslogd restart
+        pidfile        /var/run/syslogd.pid
+        instances      1
+        pctcpu         70
+        pctmem         30
+    </Process>
+
+Syslog is a good example of a process which can get a little full
+of itself under certain circumstances, and excessively hog CPU and
+memory. Here we will kill off syslogd processes if it exceeds 70%
+CPU or 30% memory utilization.
+
+Older running copies of syslogd will be killed if they are running,
+while leaving the most recently spawned copy which will be listed in
+the PID file defined.
+
+    <Process httpd>
+        spawncmd      /sbin/service httpd restart
+        pidfile       /var/run/httpd.pid
+        loglevel      LOG_CRIT
+        adminemail    pager@noc.company.com
+    </Process>
+
+Here we are monitoring Apache to ensure that it is restarted if
+it dies. The pidfile directive in this example is actually
+redundant because we have not defined any rule where we should
+consider killing any httpd processes.
+
+All notifications relating to this process will be logged with the
+syslog priority of critical (LOG_CRIT), and all emailed to
+pager@noc.company.com which could typically forward to a pager.
+
+Any failed attempts to kill or restart a process will automatically
+be logged as a syslog priority one level higher than that specified.
+If a restart of Apache were to fail in this example, a wall
+notification would be broadcast to all interactive terminals
+connected to the machine, since the next log priority up from
+LOG_CRIT is LOG_EMERG.
+
+Note that the functionality to log information to syslog requires
+the Unix::Syslog module. In the event that Unix::Syslog is not
+installed, PSMon will write all status messages that would have
+been destined for syslog, to STDERR instead.
+
+    <Process find>
+        noemail    True
+        ttl        3600
+    </Process>
+
+Kill old find processes which have been running for over an hour.
+Do not send an email notification since it's not too important.
+
+=head1 SIGNALS
+
+=over 4
+
+=item HUP
+
+Forces an immediate reload of the configuration file. You should
+send the HUP signal when you are running psmon as a background
+daemon and have altered the psmon.conf file.
+
+=item USR1
+
+Forces an immediate scan of the process table.
+
+=back
+
+=head1 EXIT CODES
+
+=over 4
+
+=item Value 0: Exited gracefully
+
+The program exited gracefully.
+
+=item Value 2: Failure to lookup UID for username
+
+The username specified by the --user command line option did not resolve to a valid
+UID.
+
+=item Value 3: Configuration file is disabled
+
+The configuration file is disabled. (It contains an active 'Disabled' directive).
+
+=item Value 4: Configuration file does not exist
+
+The specified configuration file, (default or user specified) does not exist.
+
+=item Value 5: Unable to open PID file handle
+
+Failed to open a read-only file handle for the runtime PID file.
+
+=item Value 6: Failed to fork
+
+An error occurred while attempting to fork the child background daemon process.
+
+=item Value 7: Unable to open PID file handle
+
+Failed to open a write file handle for the runtime PID file.
+
+=back
+
+=head1 PERFORMANCE
+
+psmon is not especially fast. Much of its time is spent reading the process table.
+If the process table is particularly large this can take a number of seconds.
+Although is rarely a major problem on todays speedy machines, I have run a few tests
+so you take look at the times and decide if you can afford the wait.
+
+Approximate figures from release 1.0.3:
+
+ CPU             OS              Open Files/Procs    1m Load    Real Time
+ PIII 1.1G       Mandrake 9.0         10148 / 267       0.01     0m0.430s
+ PIII 1.2G       Mandrake 9.0         16714 / 304       0.44     0m0.640s
+ Celeron 500     Red Hat 6.1           1780 /  81       1.27     0m0.880s
+ PII 450         Red Hat 6.0            300 /  23       0.01     0m1.050s
+ 2x Xeon 1.8G    Mandrake 9.0         90530 / 750       0.38     0m1.130s
+ Celeron 500     Red Hat 6.1           1517 /  77       1.00     0m1.450s
+ PIII 866        Red Hat 8.0           3769 /  76       0.63     0m1.662s
+ PIII 750        Red Hat 6.2            754 /  35       3.50     0m2.170s
+
+These production machines were running the latest patched stock distribution kernels.
+I have listed the total number of open file descriptors, processes running and 1 minute
+load average to give you a slightly better context of the performance.
+
+Approximate figures from release 1.17:
+
+ CPU                      OS                1m Load    CPU Time
+ UltraSPARC-IIe 500Mhz    SunOS 5.9            0.10    0m0.550s
+ Athlon XP 2400+ 2Ghz     RHEL 3.0             1.00    0m0.150s 
+
+=head1 SUBROUTINES
+
+This information is not intended for the casual user of this software. It is
+here as a very rough guide to benefit anybody who wishes to modify psmon for
+their own specific requirements. 
+
+=over 4
+
+=item check_processtable()
+
+Reads the current process table, checks and then executes any appropriate
+action to be taken. Does not accept any parameters. 
+
+=cut
+
+sub check_processtable {
+	my $uid = shift;
+
+	# Slurp in the process table
+	my %proc;
+	print "Scanning process table\n" if $cfg->verbose;
+	my $t = new Proc::ProcessTable;
+	if (!grep(/^fname$/,$t->fields)) {
+		$msg->Log('LOG_CRIT', "Process::Table does not support fname on your platform");
+		print "Process::Table does not support fname on your platform\n" if $cfg->verbose;
+		exit 9;
+	}
+
+	# Grab the process scopes from the config file for easy reference
+	my $cfg_process = $cfg->config('process');
+
+	foreach my $p (@{$t->table}) {
+		# Only grab information on processes we have rules for
+		next unless $cfg_process->{'*'} || $cfg_process->{$p->{fname}};
+
+		# Skip processes that don't belong to the specified UID if applicable
+		next if $uid && $p->{uid} != $uid;
+
+		my $i = !exists $proc{$p->{fname}} ? 0 : @{$proc{$p->{fname}}};
+		$proc{$p->{fname}}->[$i] = {
+				pid		=> $p->{pid},
+				ppid	=> $p->{ppid},
+				fname	=> $p->{fname},
+				tty		=> $p->{ttynum},
+				start	=> $p->{start},
+				pctcpu	=> isnumeric($p->{pctcpu}) || 0,
+				pctmem	=> isnumeric($p->{pctmem}) || 0,
+			};
+	}
+	undef $t;
+
+	# Debug
+	DUMP('%proc',\%proc);
+
+	print "Calculating action to take\n" if $cfg->verbose;
+
+	# Build a list of bad naughty processes
+	my %slay;
+	foreach my $process (keys %{$cfg->config('process')}) {
+		next unless exists $proc{$process} || $process eq '*';
+
+		# Debug
+		TRACE("Checking $process ... \n");
+		DUMP('$cfg_process->{$process}',$cfg_process->{$process});
+
+		foreach my $p (@{$proc{$process}}) {
+			# Too many instances running
+			if ($cfg_process->{$process}->{instances} && @{$proc{$process}} > $cfg_process->{$process}->{instances}) {
+				push @{$slay{$process}}, {
+						pid	=> $p->{pid},
+						cause	=> 'instances',
+						reason	=> sprintf("%d instances exceeds limit of %d",
+								scalar @{$proc{$process}},
+								$cfg_process->{$process}->{instances})
+					}
+			}
+
+			# Exceeded TTL
+			if ($cfg_process->{$process}->{ttl} && time() - $p->{start} > $cfg_process->{$process}->{ttl}) {
+				push @{$slay{$process}}, {
+						pid	=> $p->{pid},
+						cause	=> 'ttl',
+						reason	=> sprintf("%d exceeds TTL of %d",
+								time() - $p->{start},
+								$cfg_process->{$process}->{ttl})
+					}
+			} 
+
+			# Check CPU and Memory usage
+			pctcheck($process,$p,\%slay);
+		}
+	}
+
+	# Check CPU and Memory usage for *ALL* processes
+	if ($cfg_process->{'*'}) {
+		while (my ($process,$proclist) = each %proc) {
+			for my $p (@{$proclist}) {
+				pctcheck($process,$p,\%slay,'*');
+			}
+		}
+	}
+
+	# Check CPU and Memory usage
+	sub pctcheck {
+		my ($process,$p,$slayref,$scope) = @_;
+		$scope ||= $process;
+
+		# Grab the process scopes from the config file for easy reference
+		my $cfg_process = $cfg->config('process');
+
+		# Exceeded CPU Percent
+		$cfg_process->{$scope}->{pctcpu} = isnumeric($cfg_process->{$scope}->{pctcpu});
+		if ($cfg_process->{$scope}->{pctcpu} && $p->{pctcpu} > $cfg_process->{$scope}->{pctcpu}) {
+			push @{$slayref->{$process}}, {
+					pid		=> $p->{pid},
+					cause	=> 'pctcpu',
+					reason	=> sprintf("%.2f%% CPU usage exceeds limit of %.2f%%",
+									$p->{pctcpu},
+									$cfg_process->{$scope}->{pctcpu})
+				}
+		}
+
+		# Exceeded Memory Percent
+		$cfg_process->{$scope}->{pctmem} = isnumeric($cfg_process->{$scope}->{pctmem});
+		if ($cfg_process->{$scope}->{pctmem} && $p->{pctmem} > $cfg_process->{$scope}->{pctmem}) {
+			push @{$slayref->{$process}}, {
+					pid		=> $p->{pid},
+					cause	=> 'pctmem',
+					reason	=> sprintf("%.2f%% memory usage exceeds limit of %.2f%%",
+									$p->{pctmem},
+									$cfg_process->{$scope}->{pctmem})
+				}
+		}
+	}
+
+	print "Killing bad processes\n" if keys %slay && $cfg->verbose;
+	# Kill naughty processes
+	while (my ($process,$aryref) = each %slay) {
+		# Decide what loglevel we should report the action as
+		my $loglevel = $msg->loglevel($cfg_process->{$process}->{killloglevel} ||
+					$cfg_process->{$process}->{loglevel} ||
+					$cfg->config('killloglevel') || $cfg->config('loglevel') || $msg->loglevel('LOG_NOTICE'));
+
+		# Protect safe process IDs
+		if ($cfg_process->{$process}->{pidfile} && !$cfg_process->{$process}->{ppid}) {
+			if (-e $cfg_process->{$process}->{pidfile} && open(FH,$cfg_process->{$process}->{pidfile})) {
+				$cfg_process->{$process}->{ppid} = <FH>;
+				chomp $cfg_process->{$process}->{ppid};
+				close(FH);
+			}
+		}
+		my $ppid = $cfg_process->{$process}->{ppid} || 0;
+
+		# See about slaying each of these process instances
+		foreach my $slayref (@{$aryref}) {
+			next if $slayref->{pid} == $ppid
+				|| $slayref->{pid} == $$
+				|| $slayref->{pid} <= 1
+				|| $cfg->config('neverkillpid') =~ /\b$slayref->{pid}\b/
+				|| $cfg->config('neverkillprocessname') =~ /(^|\s+)$process(\s+|$)/;
+
+			# Define who to mail alerts to
+			my $mailto = ($cfg_process->{$process}->{noemailonkill} || $cfg_process->{$process}->{noemail}) ? '' : 
+							$cfg->adminemail ? $cfg->adminemail : 
+								$cfg_process->{$process}->{adminemail} || $cfg->config('adminemail');
+
+			# Try to slay the process
+			slay_process($process, $loglevel, $mailto, $slayref,
+				exists $cfg_process->{$process}->{killcmd} ? $cfg_process->{$process}->{killcmd} : '');
+		}
+	}
+
+	# Spawn any dead processes
+	foreach my $process (keys %{$cfg->config('process')}) {
+		# Only attempt to spawn a process if there are no current instances, and there is a spawncmd directive defined
+		if (!exists $proc{$process} && exists $cfg_process->{$process}->{spawncmd}) {
+
+			# Decide what loglevel we should report the action as
+			my $loglevel = $msg->loglevel($cfg_process->{$process}->{spawnloglevel} ||
+						$cfg_process->{$process}->{loglevel} ||
+						$cfg->config('spawnloglevel') || $cfg->config('loglevel') || $msg->loglevel('LOG_NOTICE'));
+
+			# Define who to mail alerts to
+			my $mailto = ($cfg_process->{$process}->{noemailonspawn} || $cfg_process->{$process}->{noemail}) ? '' : 
+							$cfg->adminemail ? $cfg->adminemail :
+								$cfg_process->{$process}->{adminemail} || $cfg->config('adminemail');
+
+			# Try to spawn the process
+			spawn_process($process, $loglevel, $mailto, $cfg_process->{$process}->{spawncmd});
+		}
+	}
+
+	# Explicitly nuke it for the paranoid (yes I know it's a locally scoped lexical!) ;-)
+	undef %proc;
+}
+
+=pod
+
+=item slay_process()
+
+Attempts to kill a process with its killcmd, or failing that using the kill() function.
+Accepts the process name, syslog log level, email notification to address and a reference
+to the %slay hash.
+
+=cut
+
+# Type to slay a process
+sub slay_process {
+	my ($process, $loglevel, $mailto, $slayref, $cmd) = @_;
+
+	# Protect safe processes
+	if ($slayref->{pid} <= $cfg->config('lastsafepid') && !$cfg->config('protectsafepidsquietly')) {
+		print_init_style("Saving PID $slayref->{pid} ($process) from death",'OK');
+		$msg->alert($loglevel, $mailto, "Saved safe PID $slayref->{pid} ($process) from death");
+
+	# This process is not protected
+	} else { 
+		print_init_style("Killing PID $slayref->{pid} ($process)");
+
+		my $tmplog = POSIX::tmpnam();
+		my $cmdrtn = $cmd && !$cfg->dryrun ? system("$cmd >$tmplog 2>&1") : 0;
+		if ($cmd) { # Tried to stop with the killcmd directive 
+			my ($exit_value, $signal_num, $dumped_core) = ($? >> 8, $? & 127, $? & 128);
+			if ($cmdrtn) {
+				print_init_style('FAILED');
+				$msg->alert($loglevel-1, $mailto,
+						"Failed to execute '$cmd' to kill PID $slayref->{pid} ($process)",
+						"Command executed: $cmd",
+						"Exit value: $exit_value",
+						"Signal number: $signal_num",
+						"Dumped core?: $dumped_core",'',
+						slurp_tmplog($tmplog),
+					);
+			} else {
+				print_init_style('OK');
+				$msg->alert($loglevel, $mailto, "Executed '$cmd' to kill PID $slayref->{pid} ($process)");
+			}
+		}
+
+		# Don't try if killcmd was tried and succeded
+		unless ($cmd && !$cmdrtn) { 
+			my $killrtn = !$cfg->dryrun ? kill(9,$slayref->{pid}) : 1;
+			if ($killrtn) {
+				print_init_style('KILLED');
+				$msg->alert($loglevel, $mailto, "Killed PID $slayref->{pid} ($process) because $slayref->{reason}");
+			} else {
+				print_init_style('FAILED');
+				$msg->alert($loglevel-1, $mailto, "Failed to kill PID $slayref->{pid} ($process)");
+			}
+		}
+	}
+}
+
+=pod
+
+=item slurp_tmplog()
+
+Slurps up the contents of a temporary log file and returns it as a chomped
+array after unlinking the temporary log file. This uses a rather nasty way to
+slurp in a file and will be changed in the future.
+
+=cut
+
+sub slurp_tmplog {
+	my $tmplog = shift;
+	my @rtn;
+	if (open(TMPLOG,"<$tmplog")) {
+		while (<TMPLOG>) {
+			chomp;
+			push @rtn, $_;
+		}
+		close(TMPLOG);
+	}
+	unlink $tmplog;
+	return @rtn;
+}
+
+=pod
+
+=item print_init_style()
+
+Prints a Red Hat sysvinit style status message. Accepts an array of messages
+to display in sequence.
+
+=cut
+
+# Print a Red Hat sysinitv style status message
+sub print_init_style {
+	return if $cfg->daemon;
+	foreach my $message (@_) {
+		if (length($message) <= 6) {
+			print "\033[60G\[";
+			if    ($cfg->dryrun)         { print "\033[1;33mDRYRUN";  }
+			elsif ($message eq 'OK')     { print "\033[1;32m  OK  ";  }
+			elsif ($message eq 'FAILED') { print "\033[1;31m$message"; }
+			elsif ($message eq 'KILLED' || $message eq 'DRYRUN') { print "\033[1;33m$message"; }
+			print "\033[0;39m\]\n";
+		} else {
+			print $message;
+		}
+	}
+}
+
+=pod
+
+=item spawn_process()
+
+Attempts to spawn a process. Accepts the process name, syslog log level, mail
+notification to address and spawn command.
+
+=cut
+
+# Spawn a process
+sub spawn_process {
+	my ($process, $loglevel, $mailto, $cmd) = @_;
+
+	print_init_style("Starting $process");
+	my $tmplog = POSIX::tmpnam();
+	my $rtn = !$cfg->dryrun ? system("$cmd >$tmplog 2>&1") : 0;
+	my ($exit_value, $signal_num, $dumped_core) = ($? >> 8, $? & 127, $? & 128);
+	if ($rtn) {
+		print_init_style('FAILED');
+		$msg->alert($loglevel-1, $mailto, "Failed to spawn '$process' with '$cmd'",
+				"Command executed: $cmd",
+				"Exit value: $exit_value",
+				"Signal number: $signal_num",
+				"Dumped core?: $dumped_core",'',
+				slurp_tmplog($tmplog),
+			);
+	} else {
+		print_init_style('OK');
+		$msg->alert($loglevel, $mailto, "Spawned '$process' with '$cmd'",
+				"Command executed: $cmd",
+				"Exit value: $exit_value",
+				"Signal number: $signal_num",
+				"Dumped core?: $dumped_core",'',
+				slurp_tmplog($tmplog),
+			);
+	}
+}
+
+=pod
+
+=item isnumeric()
+
+An evil bastard fudge to ensure that we're only dealing with numerics when
+necessary, from the config file and Proc::ProcessTable scan.
+
+=cut
+
+sub isnumeric {
+	local $_ = shift || '';
+	if (/^\s*(\-?[\d\.]+)\s*/) { return $1; }
+	return undef;
+}
+
+=pod
+
+=item daemonize()
+
+Launches the process in to the background. Checks to see if there is already an
+instance running.
+
+=cut
+
+# Daemonize self
+sub daemonize {
+	my $pidfile = shift;
+	# Check that we're not already running, and quit if we are
+	if (-f $pidfile) {
+		unless (open(PID,$pidfile)) {
+			$msg->Log('LOG_CRIT', "Unable to open file handle PID for file '$pidfile': $!\n");
+			exit 5;
+		}
+		my $pid = <PID>;
+		close(PID) || $msg->Log('LOG_WARNING', "Unable to close file handle PID for file '$pidfile': $!\n");
+
+		# This is a good method to check the process is still running (Linux only)
+		if (-f "/proc/$pid/stat") {
+			open(FH,"/proc/$pid/stat") || $msg->Log('LOG_WARNING', "Unable to open file handle FH for file '/proc/$pid/stat': $!\n");
+			my $line = <FH>;
+			close(FH) || $msg->Log('LOG_WARNING', "Unable to close file handle FH for file '/proc/$pid/stat': $!\n");
+			if ($line =~ /\d+[^(]*\((.*)\)\s*/) {
+				my $process = $1;
+				if ($process =~ /^$SELF$/) {
+					$msg->Log('LOG_NOTICE', "$SELF already running at PID $pid; exiting.\n") unless $cfg->cron;
+					$msg->closelog();
+					exit 0;
+				}
+			}
+
+		# This will work on other UNIX flavors
+		} elsif (kill(0,$pid)) {
+			$msg->Log('LOG_NOTICE', "$SELF already running at PID $pid; exiting.\n") unless $cfg->cron;
+			$msg->closelog();
+			exit 0;
+
+		# Otherwise the PID file is old and stale
+		} else {
+			$msg->Log('LOG_NOTICE', "Removing stale PID file.\n");
+			unlink($pidfile);
+		}
+	}
+
+	# Daemon parent about to spawn
+	if (my $pid = fork) {
+		$msg->Log('LOG_NOTICE', "Forking background daemon, process $pid.\n");
+		$msg->closelog();
+		exit 0;
+
+	# Child daemon process that was spawned
+	} else {
+		# Fork a second time to get rid of any attached terminals
+		if (my $pid = fork) {
+			$msg->Log('LOG_NOTICE', "Forking second background daemon, process $pid.\n");
+			$msg->closelog();
+			exit 0;
+		} else {
+			unless (defined $pid) {
+				$msg->Log('LOG_CRIT', "Cannot fork: $!\n");
+				exit 6;
+			}
+			close(STDOUT); close(STDERR); chdir '/';
+			unless (open(FH,">$pidfile")) {
+				$msg->Log('LOG_CRIT', "Unable to open file handle FH for file '$pidfile': $!\n");
+				exit 7;
+			}
+			print FH $$;
+			close(FH) || $msg->Log('LOG_WARNING', "Unable to close file handle FH for file '$pidfile': $!\n");
+		}
+	}
+}
+
+=pod
+
+=item display_version()
+
+Displays complete version, author and license information.
+
+=item TRACE()
+
+Prints trace information to STDOUT if the DEBUG constant has been set to
+boolean true. The DEBUG constant is set to boolean true in the event that
+the environment variable PSMon_DEBUG is also set to boolean true.
+
+=item DUMP()
+
+See TRACE().
+
+=back
+
+=head2 PSMon::Config METHODS
+
+=over 4
+
+=item new()
+
+Creates a new PSMon::Config object.
+
+=item pid_file()
+
+Returns the name of the PID filename which should be used for this
+particular invocation of the script.
+
+=item config()
+
+Returns a configuration value when passed a key, or returns the
+configuration complex data structure when not passed a key.
+
+=item command_line()
+
+Returns a command line value when passed a key, or returns the
+command line complex data structure when not passed a key.
+
+=item parse_command_line()
+
+Parses the command line auguments and stores them for future use.
+
+=item read_config()
+
+Reads the configuration file, performing basic validation and default
+assumptions.
+
+=item _isnumeric()
+
+An evil bastard fudge to ensure that we're only dealing with numerics when
+necessary. This is a private subroutine and not a method.
+
+=back
+
+=head2 PSMon::Logging METHODS
+
+=over 4
+
+=item new()
+
+Creates a new PSMon::Logging object.
+
+=item openlog()
+
+Opens a connection to syslog using Unix::Syslog.
+
+=item closelog()
+
+Closes a connection to syslog.
+
+=item loglevel()
+
+Accepts a syslog loglevel keyword and returns the associated constant integer.
+
+=item logfacility()
+
+Accepts a syslog facility keyword and returns the associated constant integer.
+
+=item alert()
+
+Logs a message to syslog using Log() and sends a notification email using
+sendmail().
+
+=item Log()
+
+Logs messages to DAEMON facility in syslog. Accepts a log
+level and message array. Will terminate the process if it is
+asked to log a message of a log level 2 or less (LOG_EMERG,
+LOG_ALERT, LOG_CRIT).
+
+=item sendmail()
+
+Sends email notifications of syslog messages, called by alert().
+Accepts sending email address, recipient email address, short
+message subject and an optional detailed message body array.
+
+=item _sendmail_sendmail()
+
+Called by sendmail(), sends an email using the sendmail command.
+
+=item _sendmail_smtp()
+
+Called by sendmail(), sends an email using the Net::SMTP module.
+
+=back
+
+=head2 Unix::Syslog STUB METHODS
+
+The __DATA__ section of the PSMon code contains a stub version of the
+Unix::Syslog module. It is automatically loaded in the event that the
+real Unix::Syslog module is not present and/or cannot be loaded. This stub
+module provides very basic functionality to output the messages generated
+by the PSMon::Logging module to STDERR, instead of simply dropping them.
+
+=over 4
+
+=item _timestamp()
+
+Retuns a timestamp string which closely resembles timestamps
+used by syslog.
+
+=item syslog()
+
+Outputs a syslog formatted and timestamped message to STDERR.
+
+=item openlog()
+
+Stub.
+
+=item closelog()
+
+Stub.
+
+=item setlogmask()
+
+Stub.
+
+=item priorityname()
+
+Stub.
+
+=item facilityname()
+
+Stub.
+
+=back
+
+
+=cut
+
+# Display version information
+sub display_version {
+	my $rtn = shift;
+	print "$SELF $VERSION\n";
+	print "$VERSION\n";
+	print "Written by Nicola Worthington, <nicolaw\@cpan.org>.\n\n";
+	print <<EOL;
+   Copyright 2002,2003,2004,2005 Nicola Worthington
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+EOL
+        exit($rtn) if defined $rtn;
+}
+
+=pod
+
+=head1 BUGS
+
+Hopefully none. ;-) Send any bug reports to me at nicolaw@cpan.org
+along with any patches and details of how to replicate the problem.
+Please only send reports for bugs which can be replicated in the
+I<latest> version of the software. The latest version can always be
+found at http://search.cpan.org/~nicolaw/
+
+=head1 TODO
+
+The following functionality will be added soon:
+
+=over 4
+
+=item Code cleanup
+
+The code needs to be cleaned up and made more efficient. The bulk of the
+code will be moved to a separate module, and psmon as you know it now will
+become a much smaller and simpler wrapper script.
+
+=item Apply contributed patches
+
+Users of psmon have sent me various patches for additional functionality.
+These will be incorporated in to the next major release of psmon once the
+code has been properly abstracted.
+
+=item killperprocessname directive
+
+Will accept a boolean value. If true, only 1 process per process scope
+will ever be killed, instead of all process IDs matching kill rules.
+This should be used in conjunction with the new killcmd directive. For
+example, you may define that a database daemon may never take up more
+than 90% CPU time, and it runs many children processes. If it exceeds
+90% CPU time, you want to issue ONE restart command in order to stop and
+then start all the database processes in one go.
+
+=item time period limited rules
+
+Functionality to limit validity of process scopes to only be checked
+between defined time periods. For example, only check that httpd is running
+between the hours of 8am and 5pm on Mondays and Tuesdays.
+
+=back
+
+=head1 SEE ALSO
+
+nsmon
+
+=head1 AUTHOR
+
+Nicola Worthington <nicolaw@cpan.org>
+
+L<http://www.psmon.com>
+
+=head1 COPYRIGHT
+
+Copyright 2002,2003,2004,2005 Nicola Worthington.
+
+This software is licensed under The Apache Software License, Version 2.0.
+
+L<http://www.apache.org/licenses/LICENSE-2.0>
+
+=cut
+
+sub TRACE {
+	return unless PSMon::DEBUG;
+	warn(shift());
+}
+
+sub DUMP {
+	return unless PSMon::DEBUG;
+	eval {
+		require Data::Dumper;
+		warn(shift().': '.Data::Dumper::Dumper(shift()));
+	}
+}
+
+1;
+
+
+
+
+
+
+
+
+
+
+package PSMon::Config;
+
+use strict;
+use POSIX ();
+use Carp qw(croak);
+use Getopt::Long ();
+use Config::General ();
+
+use vars qw($AUTOLOAD);
+
+DESTROY {}
+AUTOLOAD {
+	my $self = shift;
+	my $type = ref($self) || croak "$self is not an object";
+	(my $name = $AUTOLOAD) =~ s/.*://;
+	if (exists $self->{$name}) {
+		return $self->{$name};
+	} else {
+		$self->command_line($name);
+	}
+}
+
+# Create a new config object
+sub new {
+	ref(my $class = shift) && croak 'Class name required';
+	croak 'Odd number of elements passed when even number was expected' if @_ % 2;
+	my $param = { @_ };
+
+	# Define a list of which methods are allowed what paramaters
+	my $self = {};
+	$self->{allowed_keys} = {
+				'new'		=> [ qw(default_config_file) ],
+			};
+
+	# Check we understand all of the paramaters we've been given
+	while (my ($k,$v) = each %{$param}) {
+		unless (grep(/^$k$/i, @{$self->{allowed_keys}->{new}})) {
+			croak "Unrecognised paramater '$k' passed to module $class";
+		} else { $self->{$k} = $v; }
+	}
+
+	# Bless object
+	bless($self,$class);
+
+	# Debug
+	PSMon::DUMP('$self',$self);
+
+	return $self;
+}
+
+# Figure out the PID file name
+sub pid_file {
+	my $self = shift;
+
+	my ($x,$y) = (POSIX::getcwd.$cfg->config_file,0);
+	for (0..length($x)-1) { $y += ord substr($x,$_,1); }
+	my @piddirs = qw(/var/run /tmp /var/tmp /usr/tmp .);
+	my $pidfile = '/var/run/psmon.pid';
+	for my $piddir (@piddirs) {
+		my $pidfile2 = sprintf("%s/%s-%s-%s.pid",
+					$piddir,
+					$self->{SELF},
+					(defined $cfg->uid ? $cfg->uid : $>),
+					$y
+				);
+		if (-d File::Basename::dirname($pidfile2) && -w File::Basename::dirname($pidfile2)) {
+			$pidfile = $pidfile2;
+			last;
+		}
+	}
+
+	return $pidfile;
+}
+
+# Return the config reference, or a key from it
+sub config {
+	my $self = shift;
+	my $directive = shift || undef;
+
+	if (defined $directive) {
+		if (exists $self->{config}->{$directive}) {
+			return $self->{config}->{$directive};
+		} else {
+			return undef;
+		}
+	}
+	return $self->{config};
+}
+
+# Return the command_line reference, or a key from it
+sub command_line {
+	my $self = shift;
+	my $option = shift || undef;
+
+	if (defined $option) {
+		if (exists $self->{command_line}->{$option}) {
+			return defined $self->{command_line}->{$option} ? $self->{command_line}->{$option} : 1;
+		} else {
+			return undef;
+		}
+	}
+	return $self->{command_line};
+}
+
+# Get command line options
+sub parse_command_line {
+	my $self = shift;
+
+	$self->{command_line} = {};
+	Getopt::Long::GetOptions($self->{command_line}, qw(
+					help version verbose daemon cron dryrun
+					conf=s config=s user=s nouser adminemail=s
+				));
+
+	$self->{command_line}->{conf} ||= $self->{command_line}->{config};
+	$self->{dryrun} ||= 0;
+	$self->{dryrun}++ if exists $self->{command_line}->{dryrun};
+
+	# If we've been given a config file then set it if it exists and is readable
+	if (defined $self->{command_line}->{conf} && -f $self->{command_line}->{conf} && -r $self->{command_line}->{conf}) {
+		$self->{config_file} = $self->{command_line}->{conf};
+	} else {
+		if ($> == 0) {
+			$self->{config_file} = $self->default_config_file;
+		} else {
+			$self->{config_file} = sprintf('%s/etc/psmon.conf',$ENV{HOME});
+		}
+	}
+
+	# Translate --user command line option in to a UID
+	if (exists $self->{command_line}->{user}) {
+		$self->{uid} = scalar getpwnam($self->{command_line}->{user}) || undef;
+
+	# Run as the current UID if we're not superuser (UID 0) and the --nouser option is not set
+	} elsif ($> != 0 && !exists $self->{command_line}->{nouser}) {
+		$self->{uid} = $>;
+	}
+
+	# Debug
+	PSMon::DUMP('PSMon::Config',$self);
+}
+
+# Read in the config
+sub read_config {
+	my $self = shift;
+	my $config_file = shift;
+
+	croak 'No configuration filename was passed' unless defined $config_file;
+
+	# Define default configuration values
+	my %default = (
+			facility				=> 'LOG_DAEMON',
+			loglevel				=> 'LOG_NOTICE',
+			adminemail				=> 'root@localhost',
+			notifyemailfrom			=> sprintf('%s@%s',(getpwuid($>))[0],(POSIX::uname())[1]),
+			smtphost				=> 'localhost',
+			smtptimeout				=> 20,
+			sendmailcmd				=> (-e '/lib/sendmail' ? '/lib/sendmail -t' : '/usr/sbin/sendmail -t'),
+			defaultemailmethod		=> 'sendmail',
+			frequency				=> 60,
+			lastsafepid				=> 100,
+			neverkillpid			=> 1,
+			neverkillprocessname	=> 'devfsadmd kswapd kupdated mdrecoveryd pageout sched init fsflush',
+			protectsafepidsquietly	=> 0,
+		);
+
+	# Read config file
+	my $conf = new Config::General(
+			-ConfigFile				=> $config_file,
+			-LowerCaseNames			=> 1,
+			-UseApacheInclude		=> 1,
+			-IncludeRelative		=> 1,
+			-DefaultConfig			=> \%default,
+			-MergeDuplicateBlocks	=> 1,
+			-AllowMultiOptions		=> 1,
+			-MergeDuplicateOptions	=> 1,
+			-AutoTrue				=> 1,
+		);
+
+	my %tmp = $conf->getall;
+	$self->{config} = \%tmp;
+
+	# Force default values for dodgy user configuration options
+	$self->{config}->{frequency} = _isnumeric($self->{config}->{frequency}) || $default{frequency};
+	$self->{config}->{lastsafepid} = _isnumeric($self->{config}->{lastsafepid}) || $default{lastsafepid};
+
+	# AdminEmail used to be (incorrectly) defined as NotifyEmail in the config file
+	$self->{config}->{adminemail} = $self->{config}->{notifyemail} if $self->{config}->{notifyemail};
+
+	$self->{dryrun}++ if $self->{config}->{dryrun};
+
+	# Debug
+	PSMon::DUMP('PSMon::Config',$self);
+}
+
+sub _isnumeric {
+	local $_ = shift || '';
+	if (/^\s*(\-?[\d\.]+)\s*/) { return $1; }
+	return undef;
+}
+
+1;
+
+
+
+
+
+
+
+
+
+
+package PSMon::Logging;
+
+use strict;
+use POSIX ();
+use Carp qw(croak);
+
+# Create a new logging object
+sub new {
+	ref(my $class = shift) && croak 'Class name required';
+	croak 'Odd number of elements passed when even number was expected' if @_ % 2;
+	my $param = { @_ };
+
+	# Define a list of which methods are allowed what paramaters
+	my $self = {};
+	$self->{allowed_keys} = {
+				'new'		=> [ qw(SELF) ],
+				'set'		=> [ qw(defaultemailmethod notifyemailfrom sendmailcmd smtphost smtptimeout dryrun) ],
+				'sendmail'	=> [ qw(body subject to from) ],
+			};
+
+	# Check we understand all of the paramaters we've been given
+	while (my ($k,$v) = each %{$param}) {
+		unless (grep(/^$k$/i, @{$self->{allowed_keys}->{new}})) {
+			croak "Unrecognised paramater '$k' passed to module $class";
+		} else { $self->{$k} = $v; }
+	}
+
+	# Bless object
+	bless($self,$class);
+
+	# Try to load Net::SMTP
+	eval { require Net::SMTP; };
+	$self->{'Net::SMTP'} = $@ ? 0 : 1;
+
+	# Try to load Unix::Syslog
+	eval { require Unix::Syslog; import Unix::Syslog; };
+	$self->{'Unix::Syslog'} = $@ ? 0 : 1;
+
+	# Load stub version of Unix::Syslog in <DATA> if necessary
+	unless ($self->{'Unix::Syslog'}) {
+		eval join '', <DATA>;
+		die $@ if $@;
+	}
+
+	# LOG_PERRER isn't available on all systems
+	no strict;
+	my $options = Unix::Syslog::LOG_PID();
+	if (Unix::Syslog::LOG_PERROR() =~ /^\d+$/) {
+		$options = Unix::Syslog::LOG_PID() | Unix::Syslog::LOG_PERROR();
+	} else {
+		$self->{EMULATE_PERROR} = 1;
+	}
+
+	# Open syslog
+	Unix::Syslog::openlog($self->{SELF}, $options, $self->logfacility());
+
+	# Debug
+	PSMon::DUMP('$self',$self);
+
+	return $self;
+}
+
+# Object mutator
+sub set {
+	my $self = shift;
+	croak 'Odd number of elements passed when even number was expected' if @_ % 2;
+	my $param = { @_ };
+
+	# Check we understand all of the paramaters we've been given
+	while (my ($k,$v) = each %{$param}) {
+		unless (grep(/^$k$/i, @{$self->{allowed_keys}->{set}})) {
+			croak "Unrecognised paramater '$k' passed to method set()";
+		} else { $self->{$k} = $v; }
+	}
+}
+
+# Close syslog
+sub closelog {
+	my $self = shift;
+	Unix::Syslog::closelog();
+	delete $self->{EMULATE_PERROR};
+}
+
+# Open syslog
+sub openlog {
+	my $self = shift;
+	my $facility = $self->logfacility(shift);
+	no strict;
+	Unix::Syslog::openlog($self->{SELF}, Unix::Syslog::LOG_PID(), $facility);
+	delete $self->{EMULATE_PERROR};
+}
+
+# Get the loglevel value
+sub loglevel {
+	my $self = shift;
+	local $_ = shift || '';
+	return $_ if /^\d+$/;
+	{
+		no strict;
+		return exists &{"Unix::Syslog::$_"} ? &{"Unix::Syslog::$_"} : Unix::Syslog::LOG_NOTICE();
+	}
+}
+
+# Get the logfacility value
+sub logfacility {
+	my $self = shift;
+	local $_ = shift || '';
+	return $_ if /^\d+$/;
+	{
+		no strict;
+		return exists &{"Unix::Syslog::$_"} ? &{"Unix::Syslog::$_"} : Unix::Syslog::LOG_DAEMON();
+	}
+}
+
+# Report something to user and syslog
+sub alert {
+	my $self = shift;
+
+	croak 'Not enough paramaters were passed' unless @_ >= 3;
+	my ($LOG_TYPE,$mailto,$subject,@ary) = @_;
+
+	$subject ||= 'undef alert message';
+	$subject .= ' [DRYRUN]' if $self->{dryrun};
+
+	$self->Log($LOG_TYPE, $subject);
+	$self->sendmail(from => $self->{notifyemailfrom},
+				to => $mailto,
+				subject => $subject,
+				body => \@ary) if $mailto;
+}
+
+# Log something to syslog
+sub Log {
+	my $self = shift;
+
+	croak 'Not enough paramaters were passed' unless @_ >= 2;
+	my ($loglevel,@msg) = @_;
+
+	$loglevel = $self->loglevel($loglevel);
+	@msg = '' unless @msg;
+	unshift @msg,'Process exiting!' if $loglevel <= 2;
+	{ # Unix::Syslog gets unhappy for its sprintf stuff otherwise :)
+		(my $syslogmsg = "@msg") =~ s/%/%%/g;
+		Unix::Syslog::syslog($loglevel, $syslogmsg);
+		chomp $syslogmsg;
+		print "$syslogmsg\n" if $self->{EMULATE_PERROR};
+	}
+}
+
+# Send an email
+sub sendmail {
+	my $self = shift;
+	croak 'Odd number of elements passed when even number was expected' if @_ % 2;
+	my $param = { @_ };
+
+	# Check we understand all of the paramaters we've been given
+	while (my ($k,$v) = each %{$param}) {
+		unless (grep(/^$k$/i, @{$self->{allowed_keys}->{sendmail}})) {
+			croak "Unrecognised paramater '$k' passed to method sendmail()";
+		}
+	}
+
+	# Define the email body
+	my @body = ref($param->{body}) eq 'ARRAY' ? @{$param->{body}} : ($param->{subject});
+	$param->{subject} = sprintf("[%s/%s] %s",$self->{SELF},(POSIX::uname())[1],$param->{subject});
+	unshift @body, "Subject: $param->{subject}\n";
+	unshift @body, "To: \"$param->{to}\" <$param->{to}>";
+	unshift @body, "From: \"$param->{from}\" <$param->{from}>";
+
+	# Debug
+	PSMon::DUMP('@body',\@body);
+
+	# Use sendmail by default with failover to SMTP
+	if (exists $self->{defaultemailmethod} && $self->{defaultemailmethod} !~ /smtp/i) {
+		unless ($self->_sendmail_sendmail($param,@body)) {
+			$self->Log('LOG_WARNING', "Unable to send email using sendmail command $self->{sendmailcmd}; attempting SMTP connection to $self->{smtphost} instead");
+			$self->_sendmail_smtp($param,@body);
+		}
+
+	# Otherwise SMTP with failover to sendmail
+	} else {
+		unless ($self->_sendmail_smtp($param,@body)) {
+			$self->Log('LOG_WARNING', "Unable to establish SMTP connection with $self->{smtphost}; attempting sendmail pipe instead");
+			$self->_sendmail_sendmail($param,@body);
+		}
+	}
+}
+
+# Send an email using sendmail
+sub _sendmail_sendmail {
+	my $self = shift;
+
+	croak 'Not enough paramaters were passed' unless @_ >= 2;
+	my ($param,@body) = @_;
+
+	# Check that the SendMailCmd file is valid to execute
+	(my $executable = $self->{sendmailcmd}) =~ s/\s.*//;
+	if (!-f $executable) {
+		$self->Log('LOG_WARNING', "Defined SendMailCmd file '$executable' does not exist");
+		return 0;
+	} elsif (!-x $executable) {
+		$self->Log('LOG_WARNING', "Defined SendMailCmd file '$executable' is not executable");
+		return 0;
+	}
+
+	# Open a pipe file handle to the SendMailCmd executable
+	if (open(PH,"|$self->{sendmailcmd}")) {
+		print PH "$_\n" for @body;
+		if (close(PH)) {
+			return 1;
+		} else {
+			$self->Log('LOG_WARNING', "Unable to close pipe handle PH for command '|$self->{sendmailcmd}': $!");
+			return 0;
+		}
+	} else {
+		$self->Log('LOG_WARNING', "Unable to open pipe handle PH for command '|$self->{sendmailcmd}': $!");
+		return 0;
+	}
+}
+
+# Send an email using Net::SMTP
+sub _sendmail_smtp {
+	my $self = shift;
+
+	croak 'Not enough paramaters were passed' unless @_ >= 2;
+	my ($param,@body) = @_;
+	return 0 unless $self->{'Net::SMTP'};
+
+	# Create a new Net::SMTP object
+	my $smtp = Net::SMTP->new(
+						$self->{smtphost},
+						Timeout	=> $self->{smtptimeout},
+						Hello	=> (POSIX::uname())[1],
+					);
+
+	if ($smtp) { 
+		$smtp->mail($param->{from});
+		$smtp->to($param->{to});
+		$smtp->data(join("\n",@body));
+		$smtp->dataend();
+		return 1;
+	} else {
+		$self->Log('LOG_WARNING', "Unable to establish SMTP connection with $self->{smtphost}");
+		return 0;
+	}
+}
+
+1;
+
+__DATA__
+
+package Unix::Syslog;
+
+use strict;
+use POSIX ();
+use vars qw($VERSION $IDENT $HOSTNAME);
+$VERSION = '0.01';
+
+use constant LOG_EMERG => 0;
+use constant LOG_ALERT => 1;
+use constant LOG_CRIT => 2;
+use constant LOG_ERR => 3;
+use constant LOG_WARNING => 4;
+use constant LOG_NOTICE => 5;
+use constant LOG_INFO => 6;
+use constant LOG_DEBUG => 7;
+
+sub _timestamp {
+	my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
+	my @months = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+	return sprintf('%s %2d %2d:%02d:%02d', $months[$mon], $mday, $hour, $min, $sec);
+}
+
+sub syslog {
+	my $message = $_[1]; chomp $message;
+	warn sprintf("%s %s %s[%d]: %s\n",
+				_timestamp(), $HOSTNAME, $IDENT, $$, $message
+			);
+}
+
+sub openlog {
+	$IDENT = shift || 'psmon';
+	$HOSTNAME = (POSIX::uname())[1];
+}
+
+# Stubs which do nothing
+use constant LOG_PERROR => 1;
+use constant LOG_PID => 1;
+
+sub closelog {}
+sub setlogmask {}
+sub priorityname {}
+sub facilityname {}
+
+1;
+
+
+
+
+
+
+
+
+
+

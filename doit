@@ -1,0 +1,17 @@
+#!/bin/bash
+
+make veryclean 
+#cd support && pod2html --css=perldoc.css ../bin/psmon psmon.html && cd ..
+cvs2cl.pl -r -t -T -P --fsf --file Changes && rm Changes.bak
+rm -rf *.gz pm_to_blib blib Makefile Makefile.old && \
+	/usr/bin/perl Makefile.PL && \
+	make && \
+	make test && \
+	sudo make install && \
+	make dist && \
+	perl Makefile.PL && \
+	make && \
+	make install
+
+rm -rf pm_to_blib blib Makefile Makefile.old *.ts
+
