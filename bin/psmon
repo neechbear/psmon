@@ -1,7 +1,7 @@
 #!/usr/bin/perl -w
 ############################################################
 #
-#   $Id: psmon,v 1.39 2005/12/30 13:26:23 nicolaw Exp $
+#   psmon,v 1.40 2018/01/24
 #   psmon - Process Table Monitor Script
 #
 #   Copyright 2002,2003,2004,2005 Nicola Worthington
@@ -25,6 +25,7 @@ package PSMon;
 
 use strict;
 use POSIX ();
+use File::Temp ();
 use Proc::ProcessTable ();
 use File::Basename ();
 
@@ -305,14 +306,15 @@ required:
 
     Proc::ProcessTable
     Config::General
-    Getopt::Long
-    POSIX
-    File::Basename
+    Getopt::Long (core module of perl)
+    POSIX  (core module of perl)
+    File::Temp (core module of perl since v5.6.1)
+    File::Basename (core module of perl)
 
 These two additional modules are not required, but will provide enhanced
 functionality if present.
 
-    Net::SMTP
+    Net::SMTP (core module of perl since v5.7.3)
     Unix::Syslog
 
 The POSIX module is usually supplied with Perl as standard, as is
@@ -321,8 +323,8 @@ Visit http://search.span.org and http://www.cpan.org for further details.
 For the lazy people reading this, you can try the following command to
 install these modules:
 
-    for m in Config::General Proc::ProcessTable Net::SMTP \
-        Unix::Syslog Getopt::Long; do perl -MCPAN -e"install $m";done
+    for m in Proc::ProcessTable Config::General Unix::Syslog \
+        ; do perl -MCPAN -e"install $m";done
 
 Alternatively you can run the install.sh script which comes in the
 distribution tarball. It will attempt to install the right modules,
@@ -900,7 +902,7 @@ sub slay_process {
 	} else { 
 		print_init_style("Killing PID $slayref->{pid} ($process)");
 
-		my $tmplog = POSIX::tmpnam();
+		my (undef, $tmplog) = File::Temp::tempfile(UNLINK=>1);
 		my $cmdrtn = $cmd && !$cfg->dryrun ? system("$cmd >$tmplog 2>&1") : 0;
 		if ($cmd) { # Tried to stop with the killcmd directive 
 			my ($exit_value, $signal_num, $dumped_core) = ($? >> 8, $? & 127, $? & 128);
@@ -998,7 +1000,7 @@ sub spawn_process {
 	my ($process, $loglevel, $mailto, $cmd) = @_;
 
 	print_init_style("Starting $process");
-	my $tmplog = POSIX::tmpnam();
+	my (undef, $tmplog) = File::Temp::tempfile(UNLINK=>1);
 	my $rtn = !$cfg->dryrun ? system("$cmd >$tmplog 2>&1") : 0;
 	my ($exit_value, $signal_num, $dumped_core) = ($? >> 8, $? & 127, $? & 128);
 	if ($rtn) {

@@ -17,12 +17,13 @@ WriteMakefile(
 			},
 
 	PREREQ_PM		=> {
-				'Getopt::Long'			=> 0,
-				'Config::General'		=> 0,
+				'File::Temp'				=> 0,
+				'Getopt::Long'				=> 0,
+				'Config::General'			=> 0,
 				'POSIX'					=> 0,
-				'Proc::ProcessTable'	=> 0,
+				'Proc::ProcessTable'			=> 0,
 				'Net::SMTP'				=> 0,
-				'Unix::Syslog'			=> 0,
+				'Unix::Syslog'				=> 0,
 			},
 );
 
