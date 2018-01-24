@@ -1,7 +1,7 @@
 #!/bin/sh
 ############################################################
 #
-#   $Id: install.sh,v 1.11 2005/12/30 02:06:27 nicolaw Exp $
+#   install.sh,v 1.12
 #
 #   Copyright 2002,2003,2004,2005 Nicola Worthington
 #
@@ -36,7 +36,7 @@ done
 
 # Check we have all the right perl modules installed. Try and
 # install them from the tarballs provided if necessary.
-echo "Config General 2.27,Proc ProcessTable 0.39,Unix Syslog 0.99,Getopt Long 2.34," | \
+echo "Config General 2.27,Proc ProcessTable 0.39,Unix Syslog 0.99,Getopt Long 2.34,File Temp 0.2304" | \
 	while read -d',' Group Name Version
 do
 	m="$Group::$Name"
